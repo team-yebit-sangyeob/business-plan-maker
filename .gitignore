@@ -47,3 +47,9 @@ Thumbs.db
 # Logs
 *.log
 logs/
+
+# Vector DB artifacts and source PDFs (do not commit)
+**/chroma_db/
+# documents/ 아래의 원본/산출물은 전부 git에서 제외
+infra/vector_db/documents/**
+!infra/vector_db/documents/.gitkeep
