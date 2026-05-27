@@ -1,0 +1,10 @@
+# Python 3.11
+#
+# Minimal dependencies for infra/vector_db/src/build_chroma_db.py
+
+chromadb>=0.5
+langchain-chroma>=0.1
+langchain-community>=0.3
+langchain-openai>=0.2
+langchain-text-splitters>=0.3
+pypdf>=4.0
