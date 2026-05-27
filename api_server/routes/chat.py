@@ -50,13 +50,15 @@ async def _stream(session_id: str, text: str) -> AsyncIterator[dict]:
         yield {"event": "message", "data": json.dumps({"type": "token", "text": chunk})}
         await asyncio.sleep(0.03)
 
-    # 2) 검증 리포트들
+    # 2) 검증 리포트들 (cluster 라벨 포함)
     new_reports = new_state.get("validation_reports") or []
     prev_count = len(state.get("validation_reports") or [])
     for report in new_reports[prev_count:]:
+        payload = {"type": "validation_report", **report}
+        payload.setdefault("cluster", "research")
         yield {
             "event": "message",
-            "data": json.dumps({"type": "validation_report", **report}),
+            "data": json.dumps(payload),
         }
 
     # 3) 슬롯 변경분

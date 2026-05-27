@@ -31,16 +31,23 @@ UtteranceType = Literal[
 ]
 
 
+Route = Literal["research", "rag", "inference", "clarify", "none"]
+
+
 class Slot(TypedDict, total=False):
     value: str | None
     source_label: SourceLabel
     status: Literal["empty", "needs_clarification", "filled"]
 
 
-class Segment(TypedDict):
+class Segment(TypedDict, total=False):
     text: str
-    utterance_type: UtteranceType
+    canonical_text: str
+    utterance_types: list[UtteranceType]
     target_slot: str | None
+    routes: list[Route]
+    # 0=correction, 1=clarification, 2=verify(fact/hypothesis/decision/constraint), 3=opinion/meta
+    priority: int
 
 
 class Correction(TypedDict):
@@ -55,6 +62,13 @@ class ValidationReport(TypedDict, total=False):
     findings: list[str]
     sources: list[str]
     agreement: Literal["confirms", "contradicts", "partial", "unknown"]
+    cluster: Literal["research", "rag", "inference"]
+
+
+class Message(TypedDict):
+    role: Literal["user", "assistant"]
+    content: str
+    turn: int
 
 
 def _empty_slot() -> Slot:
@@ -66,10 +80,12 @@ def initial_state() -> "PlanState":
         "session_id": "",
         "turn": 0,
         "user_input": "",
+        "messages": [],
         "turn_segments": [],
         "slots": {name: _empty_slot() for name in ALL_SLOTS},
         "correction_log": [],
         "validation_reports": [],
+        "pending_clarifications": [],
         "pending_question": "",
         "output_request": None,
     }
@@ -80,11 +96,13 @@ class PlanState(TypedDict, total=False):
     turn: int
     user_input: str
 
+    messages: list[Message]
     turn_segments: list[Segment]
     slots: dict[str, Slot]
     correction_log: list[Correction]
     validation_reports: list[ValidationReport]
 
+    pending_clarifications: list[str]
     pending_question: str
     # 출력 요청 분기 결과 (8장 Type 0/1/2/3)
     output_request: Literal["type0", "type1", "type2", "type3"] | None

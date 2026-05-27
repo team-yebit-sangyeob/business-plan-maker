@@ -8,6 +8,8 @@ from common.schema.state import (
     Segment,
     Correction,
     ValidationReport,
+    Message,
+    Route,
     initial_state,
 )
 
@@ -21,5 +23,7 @@ __all__ = [
     "Segment",
     "Correction",
     "ValidationReport",
+    "Message",
+    "Route",
     "initial_state",
 ]

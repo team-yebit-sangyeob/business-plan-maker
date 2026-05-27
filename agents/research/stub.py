@@ -13,4 +13,5 @@ async def run_research(subject: str) -> ValidationReport:
         ],
         "sources": ["stub://placeholder"],
         "agreement": "unknown",
+        "cluster": "research",
     }

@@ -1,3 +1,3 @@
-from agents.conversation.agent import next_question
+from agents.conversation.agent import conversation_node
 
-__all__ = ["next_question"]
+__all__ = ["conversation_node"]
