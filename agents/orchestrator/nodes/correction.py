@@ -28,7 +28,7 @@ _CORR_SYSTEM = """오케스트레이터 정정 해소
 - action="replace": 슬롯 값을 new_value로 교체.
 - action="ignore": 슬롯 매칭이 모호하면 건너뜀.
 
-slot은 다음 중 하나: problem, target, goal, solution, market, revenue, milestones, risks, resources.
+slot은 다음 중 하나: problem, target, goal, solution, advantage, market, revenue, milestones, risks, resources.
 
 JSON만 출력."""
 
@@ -99,6 +99,10 @@ async def correction_node(state: PlanState) -> dict:
             )
         # ignore는 패스
 
+    # TODO(재검증 보류): 기획서 5장 매트릭스는 정정 시 리서치·RAG '재발동'을 요구하나,
+    # 현재는 슬롯 덮어쓰기만 하고 교체된 새 값에 대한 재검증은 하지 않는다(워커 stub 단계).
+    # 실 워커 연결 시 replace된 슬롯의 새 value를 dispatch subject로 재투입할 것.
+
     # 정정으로 처리한 세그먼트에 target_slot 표시
     for seg in targets:
         if not seg.get("target_slot") and out.actions:
@@ -110,13 +114,14 @@ async def correction_node(state: PlanState) -> dict:
 # --- slot fills ------------------------------------------------------------
 
 _FILL_SYSTEM = """오케스트레이터 슬롯 채움
-사업 계획 슬롯 9개와 비어있는 항목을 보고, 사용자 세그먼트에서 채울 수 있는 값을 추출한다.
+사업 계획 슬롯 10개와 비어있는 항목을 보고, 사용자 세그먼트에서 채울 수 있는 값을 추출한다.
 
 슬롯 의미:
 - problem: 해결하려는 문제 — 누가/어떤 상황에서/무엇 때문에/어떤 손실
 - target: 타겟 고객 — 회사/부서/직책/규모
 - goal: 목표 수치 — 언제까지 얼마, 실패 임계값
 - solution: 솔루션 형태 (서비스/제품/플랫폼/툴)
+- advantage: 차별점·경쟁우위 — 기존 대안/경쟁사 대비 우리가 이기는 이유
 - market: 시장 규모·경쟁 데이터
 - revenue: 수익 모델 (구독/건당/라이선싱 등)
 - milestones: 일정 단계

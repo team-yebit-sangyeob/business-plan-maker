@@ -1,9 +1,9 @@
-"""LangGraph 구성 (Fig.0 우선순위 토폴로지):
+"""LangGraph 구성 (Fig.0 우선순위 토폴로지, spec v0.7.5):
 
   segment → classify
           → correction              (priority=0 처리)
-          → clarify_gate            (priority=1만 있으면 verify 우회)
-            ├ verify+fills 경로     (priority=2 발견)
+          → clarify_gate            (priority=1만 있으면 dispatch 우회)
+            ├ dispatch+fills 경로   (priority=2 발견 → 리서치/RAG/비평 호출)
             └ skip 경로             (명확화 우선)
           → gate → conversation → integrator → END
 """
@@ -21,20 +21,20 @@ from agents.orchestrator.nodes.correction import (
     correction_node,
     extract_slot_fills_node,
 )
-from agents.orchestrator.nodes.verify import parallel_verify_node
+from agents.orchestrator.nodes.dispatch import parallel_dispatch_workers_node
 from agents.orchestrator.nodes.gate import gate_node
 from agents.orchestrator.nodes.integrator import response_integrator_node
 from agents.conversation.agent import conversation_node
 
 
-def _clarify_branch(state: PlanState) -> Literal["verify", "gate"]:
-    """우선순위 1(명확화)이 있고 우선순위 2(검증)는 없으면 검증 우회."""
+def _clarify_branch(state: PlanState) -> Literal["dispatch", "gate"]:
+    """우선순위 1(명확화)만 있고 우선순위 2(워커 호출)는 없으면 디스패치 우회."""
     segments = state.get("turn_segments") or []
     has_clarify = any(s.get("priority") == 1 for s in segments)
-    has_verify = any(s.get("priority") == 2 for s in segments)
-    if has_clarify and not has_verify:
+    has_dispatch = any(s.get("priority") == 2 for s in segments)
+    if has_clarify and not has_dispatch:
         return "gate"
-    return "verify"
+    return "dispatch"
 
 
 @lru_cache(maxsize=1)
@@ -43,7 +43,7 @@ def build_graph():
     g.add_node("segment", segment_node)
     g.add_node("classify", classify_node)
     g.add_node("correction", correction_node)
-    g.add_node("verify", parallel_verify_node)
+    g.add_node("dispatch", parallel_dispatch_workers_node)
     g.add_node("extract_fills", extract_slot_fills_node)
     g.add_node("gate", gate_node)
     g.add_node("conversation", conversation_node)
@@ -55,9 +55,9 @@ def build_graph():
     g.add_conditional_edges(
         "correction",
         _clarify_branch,
-        {"verify": "verify", "gate": "gate"},
+        {"dispatch": "dispatch", "gate": "gate"},
     )
-    g.add_edge("verify", "extract_fills")
+    g.add_edge("dispatch", "extract_fills")
     g.add_edge("extract_fills", "gate")
     g.add_edge("gate", "conversation")
     g.add_edge("conversation", "integrator")

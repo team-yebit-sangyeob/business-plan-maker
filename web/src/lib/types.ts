@@ -14,6 +14,7 @@ export interface Slot {
 export const REQUIRED_SLOTS = ["problem", "target", "goal"] as const;
 export const OPTIONAL_SLOTS = [
   "solution",
+  "advantage",
   "market",
   "revenue",
   "milestones",
@@ -29,6 +30,7 @@ export const SLOT_TITLES: Record<SlotName, string> = {
   target: "Target",
   goal: "Goal",
   solution: "솔루션",
+  advantage: "차별점",
   market: "시장 근거",
   revenue: "수익 모델",
   milestones: "마일스톤",

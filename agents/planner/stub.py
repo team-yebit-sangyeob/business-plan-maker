@@ -13,6 +13,7 @@ _SLOT_TITLES = {
     "target": "타겟 / 고객",
     "goal": "목표 수치",
     "solution": "솔루션",
+    "advantage": "차별점 / 경쟁우위",
     "market": "시장 근거",
     "revenue": "수익 모델",
     "milestones": "마일스톤 / 일정",

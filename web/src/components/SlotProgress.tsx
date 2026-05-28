@@ -49,7 +49,9 @@ export function SlotProgress({ session }: { session: SessionSnapshot | null }) {
         <div className="font-mono text-[10px] uppercase tracking-wider text-muted-foreground">
           slot progress
         </div>
-        <h2 className="text-base font-semibold mt-1">필수 3 · 선택 6</h2>
+        <h2 className="text-base font-semibold mt-1">
+          필수 {REQUIRED_SLOTS.length} · 선택 {OPTIONAL_SLOTS.length}
+        </h2>
       </header>
 
       <section>
@@ -76,12 +78,14 @@ export function SlotProgress({ session }: { session: SessionSnapshot | null }) {
 
       <footer className="mt-auto border-t border-border pt-4">
         <div className="text-xs text-muted-foreground font-mono">
-          필수 {filledReq}/3 · 선택 {filledOpt}/6
+          필수 {filledReq}/{REQUIRED_SLOTS.length} · 선택 {filledOpt}/{OPTIONAL_SLOTS.length}
         </div>
         <div className="mt-2 h-1 bg-muted rounded-full overflow-hidden">
           <div
             className="h-full bg-foreground rounded-full transition-all"
-            style={{ width: `${((filledReq + filledOpt) / 9) * 100}%` }}
+            style={{
+              width: `${((filledReq + filledOpt) / (REQUIRED_SLOTS.length + OPTIONAL_SLOTS.length)) * 100}%`,
+            }}
           />
         </div>
         {session?.correction_count ? (

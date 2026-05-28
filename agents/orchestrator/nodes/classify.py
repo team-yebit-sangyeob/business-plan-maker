@@ -13,7 +13,7 @@ from agents.orchestrator.llm import call_json
 
 
 _SYSTEM = """오케스트레이터 다중라벨 분류
-각 세그먼트의 canonical_text를 보고 8개 발화 유형 중 해당하는 것을 모두 고른다(다중 라벨 허용).
+각 세그먼트의 canonical_text를 보고 9개 발화 유형 중 해당하는 것을 모두 고른다(다중 라벨 허용).
 
 유형:
 - clarification_needed: 모호/추상, 추가 질문 필요
@@ -23,6 +23,7 @@ _SYSTEM = """오케스트레이터 다중라벨 분류
 - decision: 결정·약속 (예: "타겟은 네이버로 가자")
 - constraint: 숫자·기한·인원 등 제약 (예: "예산 1억, 6개월")
 - correction: 정정·취소 (예: "아니, 빼자")
+- question: 사용자가 정보를 물어봄 (예: "웹툰 시장 규모가 어떻게 돼?")
 - meta: 단순응답·진행 신호 (예: "다음", "뽑아줘")
 
 여러 유형이 한 세그먼트에 동시에 해당할 수 있다 — 예: "타겟 네이버로 정했어, 예산 1억" 같은 한 문장이면 decision+constraint. 의견에 정합성 확인이 필요하면 opinion 단독으로 둔다.
@@ -30,7 +31,7 @@ _SYSTEM = """오케스트레이터 다중라벨 분류
 priority:
 - 0: correction 포함
 - 1: clarification_needed 포함 (correction 없을 때)
-- 2: fact_claim/hypothesis/decision/constraint 중 하나라도 포함
+- 2: fact_claim/hypothesis/decision/constraint/question 중 하나라도 포함
 - 3: opinion/meta만 있을 때
 
 JSON만 출력."""
@@ -50,10 +51,11 @@ class ClassifyOut(BaseModel):
 _ROUTE_MATRIX: dict[str, set[Route]] = {
     "clarification_needed": {"clarify"},
     "fact_claim": {"research"},
-    "opinion": {"rag", "inference"},
-    "hypothesis": {"research", "rag", "inference"},
-    "decision": {"research", "rag", "inference"},
-    "constraint": {"rag", "inference"},
+    "opinion": {"rag", "critic"},
+    "hypothesis": {"research", "rag", "critic"},
+    "decision": {"research", "rag", "critic"},
+    "constraint": {"research", "rag", "critic"},  # 리서치△=예산·기한이 업계 평균 대비 현실적인지(T.02)
+    "question": {"research"},  # 사용자 정보 요청 → 리서치가 답을 찾아옴
     "correction": set(),  # correction 노드가 처리
     "meta": set(),
 }
@@ -69,7 +71,7 @@ def derive_routes(utterance_types: list[str]) -> list[Route]:
     if not routes:
         return ["none"]
     # 안정적 정렬
-    order: list[Route] = ["clarify", "research", "rag", "inference", "none"]
+    order: list[Route] = ["clarify", "research", "rag", "critic", "none"]
     return [r for r in order if r in routes]
 
 
@@ -78,7 +80,10 @@ def derive_priority(utterance_types: list[str]) -> int:
         return 0
     if "clarification_needed" in utterance_types:
         return 1
-    if any(t in utterance_types for t in ("fact_claim", "hypothesis", "decision", "constraint")):
+    if any(
+        t in utterance_types
+        for t in ("fact_claim", "hypothesis", "decision", "constraint", "question")
+    ):
         return 2
     return 3
 
