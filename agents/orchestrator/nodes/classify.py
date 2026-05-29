@@ -9,13 +9,13 @@ worked example
 --------------
 입력 세그먼트 canonical_text:
     "웹툰 IP가 일본 시장에서 통할 것이다"
-LLM utterance_types →  ["hypothesis"]
+LLM utterance_types →  ["claim"]
 derive_routes      →  ["research", "rag", "critic"]   # 전제는 검색, 회사 적합성은 RAG, 비약은 비평
 derive_priority    →  2                                # 검증 필요 = dispatch 단계
 
 입력 세그먼트:
-    "타겟은 네이버로 정했고 예산은 1억"
-LLM utterance_types →  ["decision", "constraint"]      # 한 문장에 두 유형
+    "웹툰 시장 규모가 어떻게 돼? 그리고 타겟은 네이버로 가자"
+LLM utterance_types →  ["question", "claim"]           # 한 문장에 두 유형
 derive_routes      →  ["research", "rag", "critic"]    # 두 유형의 라우트 합집합
 derive_priority    →  2
 """
@@ -29,25 +29,22 @@ from agents.orchestrator.llm import call_json
 
 
 _SYSTEM = """오케스트레이터 다중라벨 분류
-각 세그먼트의 canonical_text를 보고 9개 발화 유형 중 해당하는 것을 모두 고른다(다중 라벨 허용).
+각 세그먼트의 canonical_text를 보고 6개 발화 유형 중 해당하는 것을 모두 고른다(다중 라벨 허용).
 
 유형:
 - clarification_needed: 모호/추상, 추가 질문 필요
-- fact_claim: 외부 사실 주장 (예: "게임 시장 포화")
+- claim: 검증 가능한 내용 발화 — 외부 사실 주장·가설·결정·제약을 모두 포함 (예: "게임 시장 포화" / "일본에서 통할 거 같다" / "타겟은 네이버로 가자" / "예산 1억, 6개월")
 - opinion: 주관 선호 (예: "B2B가 우리 색깔")
-- hypothesis: 검증 가능한 가설 (예: "일본에서 통할 거 같다")
-- decision: 결정·약속 (예: "타겟은 네이버로 가자")
-- constraint: 숫자·기한·인원 등 제약 (예: "예산 1억, 6개월")
 - correction: 정정·취소 (예: "아니, 빼자")
 - question: 사용자가 정보를 물어봄 (예: "웹툰 시장 규모가 어떻게 돼?")
 - meta: 단순응답·진행 신호 (예: "다음", "뽑아줘")
 
-여러 유형이 한 세그먼트에 동시에 해당할 수 있다 — 예: "타겟 네이버로 정했어, 예산 1억" 같은 한 문장이면 decision+constraint. 의견에 정합성 확인이 필요하면 opinion 단독으로 둔다.
+여러 유형이 한 세그먼트에 동시에 해당할 수 있다 — 예: "시장 규모 어때? 타겟은 네이버로 가자" 같은 한 문장이면 question+claim. 검증할 게 없는 주관 선호면 opinion 단독으로 둔다.
 
 priority:
 - 0: correction 포함
 - 1: clarification_needed 포함 (correction 없을 때)
-- 2: fact_claim/hypothesis/decision/constraint/question 중 하나라도 포함
+- 2: claim/question 중 하나라도 포함
 - 3: opinion/meta만 있을 때
 
 JSON만 출력."""
@@ -66,11 +63,8 @@ class ClassifyOut(BaseModel):
 # ● = 항상, △ = 검증 가능 정보면 (간단화: 일단 항상 호출), — = 스킵
 _ROUTE_MATRIX: dict[str, set[Route]] = {
     "clarification_needed": {"clarify"},
-    "fact_claim": {"research"},
+    "claim": {"research", "rag", "critic"},  # 사실·가설·결정·제약 통합 — 전제는 리서치, 회사 적합성은 RAG, 비약은 비평
     "opinion": {"rag", "critic"},
-    "hypothesis": {"research", "rag", "critic"},
-    "decision": {"research", "rag", "critic"},
-    "constraint": {"research", "rag", "critic"},  # 리서치△=예산·기한이 업계 평균 대비 현실적인지(T.02)
     "question": {"research", "rag"},  # 외부 사실이면 리서치, 회사 내부 사안이면 RAG (둘 다 발동, 답 찾은 쪽이 응답)
     "correction": set(),  # correction 노드가 처리
     "meta": set(),
@@ -83,7 +77,7 @@ _VALID_TYPES: set[str] = set(_ROUTE_MATRIX.keys())
 def derive_routes(utterance_types: list[str]) -> list[Route]:
     """다중 라벨 → 발동 워커 라우트(합집합). 매트릭스가 단일 출처.
 
-    예: ["decision","constraint"] → {research,rag,critic} 합쳐서
+    예: ["claim","question"] → {research,rag,critic} 합쳐서
         ["research","rag","critic"] (order대로 정렬).
         ["meta"] → 라우트 없음 → ["none"].
     """
@@ -101,19 +95,16 @@ def derive_priority(utterance_types: list[str]) -> int:
     """다중 라벨 → 턴 내 처리 우선순위(낮을수록 먼저). 기획서 6장 우선순위 규칙.
 
     한 세그먼트에 여러 유형이 섞이면 가장 급한 것을 따른다(정정 > 명확화 > 검증 > 가벼움).
-    예: ["correction","decision"]        → 0  (상태부터 맞춰야 하므로 정정 우선)
+    예: ["correction","claim"]            → 0  (상태부터 맞춰야 하므로 정정 우선)
         ["clarification_needed"]          → 1  (모호한 채 검증하면 엉뚱한 걸 검증)
-        ["decision"] / ["question"]       → 2  (리서치·RAG·비평 디스패치 대상)
+        ["claim"] / ["question"]          → 2  (리서치·RAG·비평 디스패치 대상)
         ["opinion"] / ["meta"]            → 3  (가벼움, 마지막)
     """
     if "correction" in utterance_types:
         return 0
     if "clarification_needed" in utterance_types:
         return 1
-    if any(
-        t in utterance_types
-        for t in ("fact_claim", "hypothesis", "decision", "constraint", "question")
-    ):
+    if "claim" in utterance_types or "question" in utterance_types:
         return 2
     return 3
 

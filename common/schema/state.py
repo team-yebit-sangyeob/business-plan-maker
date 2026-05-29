@@ -25,14 +25,11 @@ OPTIONAL_SLOTS: tuple[str, ...] = (
 ALL_SLOTS: tuple[str, ...] = REQUIRED_SLOTS + OPTIONAL_SLOTS
 
 
-# 발화 유형 9종 — 매 턴 세그먼트마다 라벨링(다중 가능). 괄호는 발동 워커.
+# 발화 유형 6종 — 매 턴 세그먼트마다 라벨링(다중 가능). 괄호는 발동 워커.
 UtteranceType = Literal[
     "clarification_needed",  # 모호/추상 → 명확화. 예: "웹툰 감수성으로 사업하고 싶어"
-    "fact_claim",            # 외부 사실 주장 → 리서치. 예: "요즘 게임 시장 포화 상태래"
+    "claim",                 # 검증 가능한 내용 발화(사실·가설·결정·제약) → 리서치+RAG+비평. 예: "게임 시장 포화 상태래" / "일본에서 통할 거 같아" / "타겟은 네이버로 가자" / "예산 1억, 6개월"
     "opinion",               # 주관 선호 → RAG+비평. 예: "우리 색깔엔 B2B가 더 맞아"
-    "hypothesis",            # 검증 가능 추측 → 리서치+RAG+비평. 예: "일본에서 통할 거 같아"
-    "decision",              # 결정·약속 → 리서치+RAG+비평. 예: "타겟은 네이버로 가자"
-    "constraint",            # 숫자·기한·인원 → 리서치+RAG+비평. 예: "예산 1억, 6개월 안에 MVP"
     "correction",            # 정정·취소 → 슬롯 덮어쓰기. 예: "아 카카오는 빼자"
     "question",              # 사용자 정보 요청 → 리서치(외부)·RAG(내부). 예: "웹툰 시장 규모가 어떻게 돼?"
     "meta",                  # 단순응답·진행 신호. 예: "응 다음", "여기까지 뽑아줘"
@@ -60,10 +57,10 @@ class Segment(TypedDict, total=False):
     # 한 사용자 발화에서 잘라낸 의미 단위. 예: "일본에서 통할 거 같아"
     text: str                            # 원문 조각 그대로
     canonical_text: str                  # 맥락 복원된 자기충족 문장: "웹툰 IP가 일본 시장에서 통할 것이다"
-    utterance_types: list[UtteranceType] # 다중 라벨: ["hypothesis"] (결정+제약이면 ["decision","constraint"])
+    utterance_types: list[UtteranceType] # 다중 라벨: ["claim"] (주장이면서 질문이면 ["claim","question"])
     target_slot: str | None              # 들어갈 슬롯(있으면): "target"
     routes: list[Route]                  # 발동 워커: ["research","rag","critic"]
-    # 0=correction, 1=clarification, 2=dispatch(fact/hypothesis/decision/constraint/question), 3=opinion/meta
+    # 0=correction, 1=clarification, 2=dispatch(claim/question), 3=opinion/meta
     priority: int
 
 
