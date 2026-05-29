@@ -26,9 +26,10 @@ OutputType = Literal["type0", "type1", "type2"]
 
 
 def required_missing(state: PlanState) -> list[str]:
-    """필수 슬롯 중 값이 빈 것들. 예: target만 비면 ["target"]. 빈 리스트면 게이트 통과 가능."""
+    """필수 슬롯 중 게이트를 막는 것들. status=='filled'이 아니면 미달.
+    needs_clarification(모호한 한 줄 답변)도 막는다 — 값이 들어있어도 통과 불가."""
     slots = state.get("slots") or {}
-    return [s for s in REQUIRED_SLOTS if not (slots.get(s) or {}).get("value")]
+    return [s for s in REQUIRED_SLOTS if (slots.get(s) or {}).get("status") != "filled"]
 
 
 def optional_missing(state: PlanState) -> list[str]:
