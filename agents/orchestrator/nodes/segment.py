@@ -36,7 +36,7 @@ _SYSTEM = """오케스트레이터 세그멘테이션
 1. text: 원문에서 잘라낸 그대로의 조각.
 2. canonical_text: 앞 턴의 주체·대상·전제를 복원한 자기충족 한국어 한 문장. 대명사/지시어/생략된 주어를 모두 채워 넣는다.
 3. target_slot_hint: 아래 10개 슬롯 중 하나 또는 null.
-   problem, target, goal, solution, advantage, market, revenue, milestones, risks, resources
+   problem, target, solution, market, advantage, revenue, goal, resources, milestones, risks
 4. hints: 다음 중 해당하는 것만 배열로 — "correction"(아니/말고/빼자/사실은 등), "meta"(다음/그만/뽑아 등), "clarification"(모호/추상), "question"(사용자가 물어봄).
 
 JSON만 출력. 다른 텍스트 금지."""

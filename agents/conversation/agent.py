@@ -1,7 +1,10 @@
 """대화 에이전트 — 오케가 결정한 "어느 슬롯·어떤 의도"를 자연어 한 문장으로.
 
 판단은 안 한다(무엇을 물을지는 오케 결정) — 표현만 한다. 채울 슬롯을 고르는 규칙은
-결정론(필수 미달 우선 → 선택 → 다 차면 출력 권유), 문장 생성만 LLM.
+결정론: 기본 질문 순서 = ALL_SLOTS 자연 순서의 첫 빈칸(필수/선택 안 가림). 그래서
+goal(필수)도 solution·market·advantage·revenue 뒤에 물어진다 — 솔루션·수익모델을
+모르면 현실적 목표 수치가 안 나오므로. 다만 출력 요청인데 필수 미달이면(type0) 막은
+필수 슬롯을 콕 집어 거절. 문장 생성만 LLM.
 
 NOTE(정합성): conversation_spec은 8+종 intent(ASK_SLOT·CLARIFY·REPORT_CRITIQUE·
 REPORT_RESEARCH·PRESENT_CANDIDATES·REJECT_OUTPUT·DELIVER_PLAN·ACKNOWLEDGE)를 정의하지만,
@@ -20,22 +23,23 @@ from __future__ import annotations
 from pydantic import BaseModel
 
 from common.schema import PlanState
-from common.schema.state import ALL_SLOTS
+from common.schema.state import ALL_SLOTS, REQUIRED_SLOTS
 from agents.orchestrator.llm import call_json
 from agents.orchestrator.nodes.gate import required_missing, optional_missing
 
 
+# 질문 순서(ALL_SLOTS)대로 — 슬롯별 톤 예시
 _FEW_SHOT = {
     "problem": "어떤 문제예요? — 누가 · 어떤 상황에서 · 무엇 때문에 · 어떤 손실을 보는지까지 얘기해주면 좋아요.",
     "target": "타겟이 누구예요? — '어느 회사'가 아니라 그 안에서 계약서에 도장 찍는 사람·부서·규모·접촉 경로까지.",
-    "goal": "목표 수치는요? — 언제까지 얼마, 그리고 어디까지 안 되면 접거나 방향을 트는지 실패 임계값도 같이.",
     "solution": "솔루션 형태는 어떻게 가져갈 거예요? (서비스 / 제품 / 플랫폼 중에)",
-    "advantage": "기존 대안이나 경쟁사 대비 우리만의 차별점·이기는 이유는 뭐예요?",
     "market": "시장 규모나 경쟁사 쪽은 짚어둔 데이터 있어요? 없으면 제가 찾아볼게요.",
+    "advantage": "기존 대안이나 경쟁사 대비 우리만의 차별점·이기는 이유는 뭐예요?",
     "revenue": "수익 모델 — 구독, 건당, 라이선싱 중 어떤 쪽 그림이에요?",
+    "goal": "목표 수치는요? — 언제까지 얼마, 그리고 어디까지 안 되면 접거나 방향을 트는지 실패 임계값도 같이.",
+    "resources": "필요한 인력·예산 규모는 어떻게 보세요?",
     "milestones": "마일스톤 — 언제까지 어느 단계까지 가야 한다고 보세요?",
     "risks": "걱정되는 리스크부터 하나 짚어주실래요?",
-    "resources": "필요한 인력·예산 규모는 어떻게 보세요?",
 }
 
 
@@ -67,19 +71,22 @@ async def conversation_node(state: PlanState) -> dict:
     missing_opt = optional_missing(state)
 
     if output_request == "type0":
+        # 출력 요청인데 필수 미달 → 출력을 막은 필수 슬롯을 콕 집어 거절
         target_slot = missing_req[0]
         mode = "type0_reject"
-    elif missing_req:
-        target_slot = missing_req[0]
-        mode = "required"
-    elif missing_opt:
-        target_slot = missing_opt[0]
-        mode = "optional"
     else:
-        # 다 찼고 출력 안 했으면 출력 권유
-        return {
-            "pending_question": "10개 항목 다 채워졌어요. '계획서 생성' 눌러서 뽑아볼까요?"
-        }
+        # 기본 질문 순서 = ALL_SLOTS 자연 순서의 첫 빈칸 (required/optional 안 가림).
+        # 그래서 goal(필수)도 solution·market·advantage·revenue 뒤에 물어진다.
+        slots = state.get("slots") or {}
+        target_slot = next(
+            (s for s in ALL_SLOTS if not (slots.get(s) or {}).get("value")), None
+        )
+        if target_slot is None:
+            # 다 찼고 출력 안 했으면 출력 권유
+            return {
+                "pending_question": "10개 항목 다 채워졌어요. '계획서 생성' 눌러서 뽑아볼까요?"
+            }
+        mode = "required" if target_slot in REQUIRED_SLOTS else "optional"
 
     example = _FEW_SHOT.get(target_slot, "")
     user_payload = (

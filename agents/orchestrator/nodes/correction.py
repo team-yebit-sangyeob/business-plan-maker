@@ -41,7 +41,7 @@ _CORR_SYSTEM = """오케스트레이터 정정 해소
 - action="replace": 슬롯 값을 new_value로 교체.
 - action="ignore": 슬롯 매칭이 모호하면 건너뜀.
 
-slot은 다음 중 하나: problem, target, goal, solution, advantage, market, revenue, milestones, risks, resources.
+slot은 다음 중 하나: problem, target, solution, market, advantage, revenue, goal, resources, milestones, risks.
 
 JSON만 출력."""
 
@@ -129,17 +129,17 @@ async def correction_node(state: PlanState) -> dict:
 _FILL_SYSTEM = """오케스트레이터 슬롯 채움
 사업 계획 슬롯 10개와 비어있는 항목을 보고, 사용자 세그먼트에서 채울 수 있는 값을 추출한다.
 
-슬롯 의미:
+슬롯 의미 (질문 순서):
 - problem: 해결하려는 문제 — 누가/어떤 상황에서/무엇 때문에/어떤 손실
 - target: 타겟 고객 — 회사/부서/직책/규모
-- goal: 목표 수치 — 언제까지 얼마, 실패 임계값
 - solution: 솔루션 형태 (서비스/제품/플랫폼/툴)
-- advantage: 차별점·경쟁우위 — 기존 대안/경쟁사 대비 우리가 이기는 이유
 - market: 시장 규모·경쟁 데이터
+- advantage: 차별점·경쟁우위 — 기존 대안/경쟁사 대비 우리가 이기는 이유
 - revenue: 수익 모델 (구독/건당/라이선싱 등)
+- goal: 목표 수치 — 언제까지 얼마, 실패 임계값
+- resources: 인력·예산 규모
 - milestones: 일정 단계
 - risks: 리스크
-- resources: 인력·예산 규모
 
 이미 채워진 슬롯은 건드리지 마라(정정 노드가 처리함). 세그먼트 내용이 슬롯에 명백히 들어맞을 때만 추출.
 

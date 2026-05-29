@@ -11,31 +11,41 @@ export interface Slot {
   status: "empty" | "needs_clarification" | "filled";
 }
 
-export const REQUIRED_SLOTS = ["problem", "target", "goal"] as const;
-export const OPTIONAL_SLOTS = [
+// 슬롯 표시·질문 순서 = 사업계획 자연 전개 순서 (백엔드 common/schema/state.py ALL_SLOTS와 일치).
+// 문제 → 고객 → 솔루션 → 시장 → 차별점 → 수익모델 → 목표 → 리소스 → 마일스톤 → 리스크.
+export const ALL_SLOTS = [
+  "problem",
+  "target",
   "solution",
-  "advantage",
   "market",
+  "advantage",
   "revenue",
+  "goal",
+  "resources",
   "milestones",
   "risks",
-  "resources",
 ] as const;
-export type SlotName =
-  | (typeof REQUIRED_SLOTS)[number]
-  | (typeof OPTIONAL_SLOTS)[number];
+export type SlotName = (typeof ALL_SLOTS)[number];
 
+// 출력 게이트 필수 — 순서가 아니라 '셋 다 차야 출력' 멤버십. UI에선 굵게 표시.
+export const REQUIRED_SLOTS = ["problem", "target", "goal"] as const;
+const REQUIRED_SET = new Set<string>(REQUIRED_SLOTS);
+export const isRequiredSlot = (name: string): boolean => REQUIRED_SET.has(name);
+// 선택 = 나머지(자연 순서 유지). 카운트/문구용.
+export const OPTIONAL_SLOTS = ALL_SLOTS.filter((s) => !isRequiredSlot(s));
+
+// 질문 순서(ALL_SLOTS)대로
 export const SLOT_TITLES: Record<SlotName, string> = {
   problem: "Problem",
   target: "Target",
-  goal: "Goal",
   solution: "솔루션",
-  advantage: "차별점",
   market: "시장 근거",
+  advantage: "차별점",
   revenue: "수익 모델",
+  goal: "Goal",
+  resources: "리소스",
   milestones: "마일스톤",
   risks: "리스크",
-  resources: "리소스",
 };
 
 export const SOURCE_LABEL_KO: Record<SourceLabel, string> = {

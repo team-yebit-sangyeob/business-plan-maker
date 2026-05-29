@@ -8,17 +8,18 @@ from common.schema.labels import SourceLabel
 from common.schema.state import REQUIRED_SLOTS, OPTIONAL_SLOTS
 
 
+# 질문 순서(ALL_SLOTS)대로 — 렌더는 REQUIRED/OPTIONAL 두 섹션으로 묶지만 제목 매핑은 동일
 _SLOT_TITLES = {
     "problem": "문제 정의",
     "target": "타겟 / 고객",
-    "goal": "목표 수치",
     "solution": "솔루션",
-    "advantage": "차별점 / 경쟁우위",
     "market": "시장 근거",
+    "advantage": "차별점 / 경쟁우위",
     "revenue": "수익 모델",
+    "goal": "목표 수치",
+    "resources": "필요 리소스",
     "milestones": "마일스톤 / 일정",
     "risks": "리스크 / 대응",
-    "resources": "필요 리소스",
 }
 
 

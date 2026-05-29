@@ -6,23 +6,30 @@ from typing import Literal, TypedDict
 from common.schema.labels import SourceLabel
 
 
-# 필수 슬롯 3 — 셋 다 차야 계획서 출력 게이트 통과 (기획서 3장). 예시는 웹툰 감수 사업.
-REQUIRED_SLOTS: tuple[str, ...] = (
-    "problem",   # 문제: "웹툰 신작 공개 후 3~5일 내 성 감수성 논란 1건+, 30%가 휴재로"
-    "target",    # 타겟: "네이버·카카오 콘텐츠 운영팀(5~10명), 의사결정자 콘텐츠본부장급"
-    "goal",      # 목표: "6개월 내 유료 3개사·월 1,500만원, 1개사도 못 따면 형태 재검토"
-)
-# 선택 슬롯 7 — 비어도 출력 가능([미정] 표시). 자동 채움 부류는 3.3 참고.
-OPTIONAL_SLOTS: tuple[str, ...] = (
+# 슬롯 질문(조사) 순서 = 사업계획을 자연스럽게 전개하는 순서.
+# 문제 → 고객 → 무엇을(solution) → 시장/경쟁(market) → 그래서 차별점(advantage) →
+# 수익모델(revenue) → 목표수치(goal) → 자원(resources) → 일정(milestones) → 리스크(risks).
+# 이 튜플 순서가 곧 conversation_node가 "다음 빈칸"을 고르는 기본 질문 순서다(중간에
+# 사용자가 다른 슬롯을 말하면 그건 채워지고, 다음 턴엔 남은 첫 빈칸을 묻는다).
+# 예시는 웹툰 감수 사업.
+ALL_SLOTS: tuple[str, ...] = (
+    "problem",     # 문제: "웹툰 신작 공개 후 3~5일 내 성 감수성 논란 1건+, 30%가 휴재로"  [필수]
+    "target",      # 타겟: "네이버·카카오 콘텐츠 운영팀(5~10명), 의사결정자 콘텐츠본부장급"  [필수]
     "solution",    # 솔루션(결정형): "B2B 감수 서비스" / "AI 자동 검수 툴"
-    "advantage",   # 차별점·경쟁우위(파생형): "기존 외주 감수 대비 24시간→실시간·1/5 비용" — "왜 우리인가"
     "market",      # 시장 근거(데이터형): "국내 웹툰 시장 규모·경쟁사" — 리서치가 채움
+    "advantage",   # 차별점·경쟁우위(파생형): "외주 감수 대비 실시간·1/5 비용" — solution+market 뒤라야 나옴
     "revenue",     # 수익 모델(결정형): "월 구독 SaaS" / "건당 컨설팅 피" — 후보 제시
+    "goal",        # 목표(필수): "6개월 유료 3개사·월 1,500만, 미달 시 재검토" — 솔루션·수익모델 뒤라야 현실적 숫자  [필수]
+    "resources",   # 필요 리소스(파생형): "감수 인력 2명·예산 1억"
     "milestones",  # 마일스톤(파생형): "3개월 PoC → 6개월 첫 계약" — 추론 도출
     "risks",       # 리스크(파생형): "내부 감수팀 보유 시 니즈 약함"
-    "resources",   # 필요 리소스(파생형): "감수 인력 2명·예산 1억"
 )
-ALL_SLOTS: tuple[str, ...] = REQUIRED_SLOTS + OPTIONAL_SLOTS
+
+# 출력 게이트 필수 3 — '셋 다 차야 출력'이라는 멤버십(기획서 3장). 질문 순서와 무관하다:
+# goal은 질문은 늦게(7번째) 받지만 출력 전엔 반드시 차 있어야 한다(gate가 강제).
+REQUIRED_SLOTS: tuple[str, ...] = ("problem", "target", "goal")
+# 선택 = 나머지. 자연 질문 순서를 유지하려고 ALL_SLOTS에서 거른다(비어도 [미정]로 출력 가능).
+OPTIONAL_SLOTS: tuple[str, ...] = tuple(s for s in ALL_SLOTS if s not in REQUIRED_SLOTS)
 
 
 # 발화 유형 6종 — 매 턴 세그먼트마다 라벨링(다중 가능). 괄호는 발동 워커.

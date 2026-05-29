@@ -1,15 +1,29 @@
 import type { SessionSnapshot, Slot } from "../lib/types";
 import {
+  ALL_SLOTS,
   OPTIONAL_SLOTS,
   REQUIRED_SLOTS,
   SLOT_TITLES,
   SOURCE_LABEL_KO,
+  isRequiredSlot,
 } from "../lib/types";
 
-function SlotRow({ name, slot }: { name: string; slot: Slot | undefined }) {
+function SlotRow({
+  name,
+  slot,
+  index,
+}: {
+  name: string;
+  slot: Slot | undefined;
+  index: number;
+}) {
   const filled = slot?.status === "filled";
+  const required = isRequiredSlot(name);
   return (
     <li className="flex items-center gap-2 py-1.5 text-sm">
+      <span className="w-4 shrink-0 text-right font-mono text-[10px] text-muted-foreground/60">
+        {index + 1}
+      </span>
       <span
         className={
           filled
@@ -18,14 +32,18 @@ function SlotRow({ name, slot }: { name: string; slot: Slot | undefined }) {
         }
       />
       <span
-        className={
-          filled
-            ? "text-foreground font-medium"
-            : "text-muted-foreground"
-        }
+        className={[
+          required ? "font-bold" : "font-normal",
+          filled ? "text-foreground" : "text-muted-foreground",
+        ].join(" ")}
       >
         {SLOT_TITLES[name as keyof typeof SLOT_TITLES] ?? name}
       </span>
+      {required && (
+        <span className="text-[9px] uppercase tracking-wider text-accent font-mono border border-accent/40 rounded px-1 leading-tight">
+          필수
+        </span>
+      )}
       {filled && slot?.source_label && (
         <span className="ml-auto text-[10px] uppercase tracking-wider text-muted-foreground font-mono">
           {SOURCE_LABEL_KO[slot.source_label]}
@@ -50,28 +68,17 @@ export function SlotProgress({ session }: { session: SessionSnapshot | null }) {
           slot progress
         </div>
         <h2 className="text-base font-semibold mt-1">
-          필수 {REQUIRED_SLOTS.length} · 선택 {OPTIONAL_SLOTS.length}
+          질문 순서 · 필수 {REQUIRED_SLOTS.length}<span className="text-muted-foreground font-normal">(굵게)</span>
         </h2>
       </header>
 
       <section>
-        <div className="font-mono text-[10px] uppercase tracking-wider text-foreground mb-1.5">
-          필수 (출력 조건)
-        </div>
-        <ul>
-          {REQUIRED_SLOTS.map((n) => (
-            <SlotRow key={n} name={n} slot={session?.slots?.[n]} />
-          ))}
-        </ul>
-      </section>
-
-      <section>
         <div className="font-mono text-[10px] uppercase tracking-wider text-muted-foreground mb-1.5">
-          선택 (보강)
+          조사 순서대로 — 굵은 항목이 출력 필수
         </div>
         <ul>
-          {OPTIONAL_SLOTS.map((n) => (
-            <SlotRow key={n} name={n} slot={session?.slots?.[n]} />
+          {ALL_SLOTS.map((n, i) => (
+            <SlotRow key={n} name={n} index={i} slot={session?.slots?.[n]} />
           ))}
         </ul>
       </section>
