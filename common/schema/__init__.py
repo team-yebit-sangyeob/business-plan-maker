@@ -10,6 +10,7 @@ from common.schema.state import (
     ValidationReport,
     Message,
     Route,
+    ClaimType,
     initial_state,
 )
 
@@ -25,5 +26,6 @@ __all__ = [
     "ValidationReport",
     "Message",
     "Route",
+    "ClaimType",
     "initial_state",
 ]

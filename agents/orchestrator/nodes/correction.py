@@ -14,10 +14,10 @@ correction_node: utterance_types에 correction 포함 세그먼트만 모아 LLM
   예: 슬롯 target="네이버·카카오" 상태에서 "카카오는 빼자"
       → action: replace target = "네이버" (또는 맥락상 clear)
 
-extract_slot_fills_node: 정정 이후 단계에서, 검증/결정/제약/가설/의견 세그먼트 중
+extract_slot_fills_node: 정정 이후 단계에서, claim/opinion 세그먼트 중
   '비어 있는' 슬롯에 명백히 들어맞는 값만 골라 채움(이미 찬 슬롯은 안 건드림).
 
-  예: 빈 슬롯 [target, goal] + 세그먼트 "(decision) 타겟은 네이버 콘텐츠 운영팀"
+  예: 빈 슬롯 [target, goal] + 세그먼트 "(claim) 타겟은 네이버 콘텐츠 운영팀"
       → fills: target = "네이버 콘텐츠 운영팀" (source=user). goal은 근거 없으면 그대로 빔.
 """
 from __future__ import annotations
@@ -162,7 +162,7 @@ async def extract_slot_fills_node(state: PlanState) -> dict:
         for s in segments
         if any(
             t in (s.get("utterance_types") or [])
-            for t in ("fact_claim", "decision", "constraint", "hypothesis", "opinion")
+            for t in ("claim", "opinion")
         )
     ]
     if not candidates:

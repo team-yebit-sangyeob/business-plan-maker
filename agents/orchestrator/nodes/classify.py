@@ -10,6 +10,7 @@ worked example
 입력 세그먼트 canonical_text:
     "웹툰 IP가 일본 시장에서 통할 것이다"
 LLM utterance_types →  ["claim"]
+derive_claim_type  →  "hypothesis_premise"            # 가설 결론이 아닌, 받치는 전제를 검증
 derive_routes      →  ["research", "rag", "critic"]   # 전제는 검색, 회사 적합성은 RAG, 비약은 비평
 derive_priority    →  2                                # 검증 필요 = dispatch 단계
 
@@ -24,7 +25,7 @@ from __future__ import annotations
 from pydantic import BaseModel, Field
 
 from common.schema import PlanState
-from common.schema.state import Route, UtteranceType
+from common.schema.state import ClaimType, Route, UtteranceType
 from agents.orchestrator.llm import call_json
 
 
@@ -41,6 +42,28 @@ _SYSTEM = """오케스트레이터 다중라벨 분류
 
 여러 유형이 한 세그먼트에 동시에 해당할 수 있다 — 예: "시장 규모 어때? 타겟은 네이버로 가자" 같은 한 문장이면 question+claim. 검증할 게 없는 주관 선호면 opinion 단독으로 둔다.
 
+claim_type (utterance_types에 "claim"이 있을 때만 채우고, 없으면 null):
+- fact: 검증 가능한 외부 사실 (예: "게임 시장 포화 상태래")
+- hypothesis_premise: 가설을 받치는 검증 가능한 전제 (예: "일본 웹툰 시장 성장 중"). 가설 결론 자체("우리 IP가 통할 거야")는 검증 대상이 아니다 — 받치는 전제만 고른다.
+- decision_context: 결정의 배경이 되는 사실 (예: "타겟은 네이버로 가자" → "네이버 콘텐츠 운영 조직 현황")
+- market_fill: 자동 채움 맥락에서 시장 규모·근거를 찾는 경우
+claim이 여러 성격을 겸하면 가장 핵심인 하나만 고른다.
+
+구분 가이드 — 헷갈리는 경계:
+- claim vs opinion: 외부 데이터·회사 자료로 맞다/틀리다를 따질 수 있으면 claim, 순수 취향·가치판단이면 opinion.
+  · "B2B 시장이 더 커" → claim (시장 규모는 검증 가능)
+  · "난 B2B가 더 끌려" → opinion (주관)
+  · "B2B가 우리 색깔에 맞아, 영업 인프라도 강하니까" → opinion (근거를 댔어도 '우리 색깔'은 취향 판단 — 단, 근거의 사실 여부는 회사 자료로 비평이 따짐)
+  · "타겟은 네이버로 가자" → claim (결정 = 향후 슬롯에 박히는 약속, decision_context)
+- correction은 '이전에 정한 것을 무르거나 바꿀 때'만. 정정 키워드가 있어도 새 진술이면 claim:
+  · "아 카카오는 빼자" → correction (앞서 넣은 타겟을 무름)
+  · "네이버 말고 카카오로 가자" → correction (대상 교체)
+  · "말고 또 뭐가 있을까?" → question (정정 아님 — 키워드만 같음)
+  · "바꾸는 게 어렵진 않아" → claim/opinion (정정 의도 없음)
+- 한 세그먼트 다중 라벨 예:
+  · "시장 규모 어때? 그리고 타겟은 네이버로 가자" → ["question","claim"]
+  · "그건 취소하고, 일본 시장은 성장 중이잖아" → ["correction","claim"]
+
 priority:
 - 0: correction 포함
 - 1: clarification_needed 포함 (correction 없을 때)
@@ -53,6 +76,7 @@ JSON만 출력."""
 class ClassifyItem(BaseModel):
     canonical_text: str
     utterance_types: list[str] = Field(default_factory=list)
+    claim_type: str | None = None  # "claim" 유형일 때만 의미, 그 외 무시
 
 
 class ClassifyOut(BaseModel):
@@ -72,6 +96,28 @@ _ROUTE_MATRIX: dict[str, set[Route]] = {
 
 
 _VALID_TYPES: set[str] = set(_ROUTE_MATRIX.keys())
+
+_VALID_CLAIM_TYPES: set[str] = {
+    "fact",
+    "hypothesis_premise",
+    "decision_context",
+    "market_fill",
+}
+
+
+def derive_claim_type(
+    utterance_types: list[str], raw_claim_type: str | None
+) -> ClaimType | None:
+    """claim 세그먼트에만 claim_type을 부여(검증). 그 외 유형이면 None.
+
+    LLM이 claim인데 claim_type을 안 주거나 알 수 없는 값이면 "fact"로 보수 처리
+    — 리서치가 일반 사실 검증으로 다루는 게 오분류 시 가장 안전(전제 누락보다 낫다).
+    """
+    if "claim" not in utterance_types:
+        return None
+    if raw_claim_type in _VALID_CLAIM_TYPES:
+        return raw_claim_type  # type: ignore[return-value]
+    return "fact"
 
 
 def derive_routes(utterance_types: list[str]) -> list[Route]:
@@ -125,7 +171,7 @@ async def classify_node(state: PlanState) -> dict:
     for idx, seg in enumerate(segments):
         # segment 노드가 hints로 미리 박은 라벨(correction/clarification_needed/question/meta)은
         # 신뢰도가 높아 보존하고, classify LLM 결과를 그 위에 합친다.
-        # 예: segment가 ["correction"]을 박고 LLM이 ["decision"]을 더하면 → ["correction","decision"]
+        # 예: segment가 ["correction"]을 박고 LLM이 ["claim"]을 더하면 → ["correction","claim"]
         prior = list(seg.get("utterance_types") or [])
         types: list[str] = list(prior)
         if llm_items is not None:
@@ -140,5 +186,7 @@ async def classify_node(state: PlanState) -> dict:
         seg["utterance_types"] = [t for t in types if t in _VALID_TYPES]  # type: ignore[assignment]
         seg["priority"] = derive_priority(seg["utterance_types"])
         seg["routes"] = derive_routes(seg["utterance_types"])
+        raw_ct = llm_items[idx].claim_type if llm_items is not None else None
+        seg["claim_type"] = derive_claim_type(seg["utterance_types"], raw_ct)
 
     return {"turn_segments": segments}

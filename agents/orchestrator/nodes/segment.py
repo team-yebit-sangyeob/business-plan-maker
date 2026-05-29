@@ -5,7 +5,7 @@
 쿼리 분해기가 그 문장만 받아도 검색 쿼리를 만들 수 있어야 함.
 
 여기서는 분류를 끝내지 않는다 — hints로 신호가 뚜렷한 4종(correction/clarification/
-question/meta)만 미리 박고, 나머지 본분류(opinion/decision/...)는 classify_node가 한다.
+question/meta)만 미리 박고, 나머지 본분류(claim/opinion)는 classify_node가 한다.
 
 worked example
 --------------
@@ -16,7 +16,7 @@ worked example
     1. text="게임 시장 포화고"            canonical="한국 게임 시장이 포화 상태다"           hints=[]
     2. text="일본에서 통할 거 같아"        canonical="웹툰 IP가 일본 시장에서 통할 것이다"     hints=[]
     3. text="'신사업'이 추상적이긴 해"     canonical="'신사업'이라는 방향이 아직 추상적이다"   hints=["clarification"]
-  (1·2의 본분류는 classify가 fact_claim·hypothesis로 채움. 3은 여기서 priority=1로 확정.)
+  (1·2의 본분류는 classify가 claim으로 채움. 3은 여기서 priority=1로 확정.)
 """
 from __future__ import annotations
 

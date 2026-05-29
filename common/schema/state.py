@@ -36,6 +36,16 @@ UtteranceType = Literal[
 ]
 
 
+# claim 세그먼트의 세부 유형 — 리서치(VerificationRequest.claim_type)가 검증 강도/쿼리 분해에 사용.
+# claim 라벨이 붙은 세그먼트에만 의미가 있고, 그 외 유형엔 None.
+ClaimType = Literal[
+    "fact",                # 검증 가능한 외부 사실. 예: "게임 시장 포화"
+    "hypothesis_premise",  # 가설의 검증 가능한 전제. 예: "일본 웹툰 시장 성장 추세"(가설 자체는 비평 몫)
+    "decision_context",    # 결정의 배경 사실. 예: "네이버·카카오 콘텐츠 운영 조직 현황"
+    "market_fill",         # Type 3 자동 채움의 시장 근거. 더 엄격한 출처 기준 적용
+]
+
+
 # 세그먼트가 발동시킬 워커. classify의 _ROUTE_MATRIX가 발화 유형→라우트로 변환.
 Route = Literal[
     "research",  # 웹 리서치 — 외부 사실 검증
@@ -58,6 +68,7 @@ class Segment(TypedDict, total=False):
     text: str                            # 원문 조각 그대로
     canonical_text: str                  # 맥락 복원된 자기충족 문장: "웹툰 IP가 일본 시장에서 통할 것이다"
     utterance_types: list[UtteranceType] # 다중 라벨: ["claim"] (주장이면서 질문이면 ["claim","question"])
+    claim_type: ClaimType | None         # "claim" 유형일 때만 세부 분류, 그 외 None. 리서치로 전달.
     target_slot: str | None              # 들어갈 슬롯(있으면): "target"
     routes: list[Route]                  # 발동 워커: ["research","rag","critic"]
     # 0=correction, 1=clarification, 2=dispatch(claim/question), 3=opinion/meta

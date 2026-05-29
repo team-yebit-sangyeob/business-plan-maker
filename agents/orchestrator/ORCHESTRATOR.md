@@ -35,10 +35,12 @@ OPTIONAL_SLOTS = ("solution", "advantage", "market", "revenue", "milestones", "r
   → **출처 라벨은 기획서 3.4 그대로 유지** (에이전트 이름은 critic으로 바뀌었지만 라벨 enum은 불변).
 - `status` ∈ `empty / needs_clarification / filled`.
 
-### 발화 유형 9종 (`UtteranceType`)
+### 발화 유형 6종 (`UtteranceType`)
 
-`clarification_needed · fact_claim · opinion · hypothesis · decision · constraint · correction · question · meta`
-> `question`(사용자 정보 요청 → 리서치)은 기획서 8유형 외에 도메인 보강으로 추가.
+`clarification_needed · claim · opinion · correction · question · meta`
+> v0.7.5에서 9→6 통합: 구 `fact_claim · hypothesis · decision · constraint`를 **`claim`** 하나로 합침.
+> claim의 세부 구분은 별도 `ClaimType`(`fact · hypothesis_premise · decision_context · market_fill`)으로 분리 — 리서치 전달용.
+> `question`(사용자 정보 요청 → 리서치·RAG)은 기획서 8유형 외 도메인 보강으로 추가.
 
 ### 라우트 (`Route`)
 
@@ -47,8 +49,9 @@ OPTIONAL_SLOTS = ("solution", "advantage", "market", "revenue", "milestones", "r
 
 ### Segment / ValidationReport / Correction
 
-- `Segment`: `{text, canonical_text, utterance_types[], target_slot, routes[], priority}`
-  - `priority`: **0=정정, 1=명확화, 2=워커 디스패치(fact/hypothesis/decision/constraint/question), 3=의견·메타** — 그래프 분기 키.
+- `Segment`: `{text, canonical_text, utterance_types[], claim_type, target_slot, routes[], priority}`
+  - `priority`: **0=정정, 1=명확화, 2=워커 디스패치(claim/question), 3=의견·메타** — 그래프 분기 키.
+  - `claim_type`: `claim` 유형일 때만 채워지는 세부 분류(`ClaimType`), 그 외 None.
 - `ValidationReport`: `{subject, findings[], sources[], agreement, cluster}`, `cluster ∈ research/rag/critic`.
 - `Correction`: `{slot, previous, new, turn}` — 정정 이력.
 
@@ -106,14 +109,14 @@ START
 | 발화 유형 | clarify | research | rag | critic |
 |---|:---:|:---:|:---:|:---:|
 | clarification_needed | ● | | | |
-| fact_claim | | ● | | |
+| claim | | ● | ● | ● |
 | opinion | | | ● | ● |
-| hypothesis | | ● | ● | ● |
-| decision | | ● | ● | ● |
-| constraint | | ●(△) | ● | ● |
-| question | | ● | | |
+| question | | ● | ● | |
 | correction | (correction_node 처리) | | | |
 | meta | (워커 호출 없음) | | | |
+
+> 구 `fact_claim/hypothesis/decision/constraint`는 `claim`으로 통합 — research+rag+critic 모두 발동.
+> claim의 검증 세부(전제 vs 사실 vs 결정 배경)는 `ClaimType`으로 리서치에 전달.
 
 - `derive_routes`: 여러 라벨의 활성 클러스터 **합집합**, `[clarify, research, rag, critic, none]` 순서로 정렬.
 - `derive_priority`: correction>clarification>dispatch>의견/메타 순.
@@ -131,7 +134,7 @@ START
 ### 3.4 `extract_slot_fills_node` (`nodes/correction.py`)
 
 dispatch 경로에서만 실행 (그래프상 dispatch 다음). **비어있는 슬롯**에 들어갈 값을 세그먼트에서 추출.
-- 후보 = `fact_claim/decision/constraint/hypothesis/opinion` 라벨 가진 세그먼트.
+- 후보 = `claim/opinion` 라벨 가진 세그먼트.
 - 빈 슬롯 없으면 LLM 호출 안 함 (비용 절약).
 - 추출값은 `source_label=USER`, 빈 슬롯에만 채움 (이미 찬 슬롯은 correction_node 담당).
 

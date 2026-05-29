@@ -9,7 +9,7 @@
 
 end-to-end trace 예시 (turn 5, "카카오는 빼자. 예산은 1억으로 가자."):
   segment      → [seg1 "카카오는 빼자"(hints=correction), seg2 "예산 1억으로 가자"]
-  classify     → seg1=["correction"](p0), seg2=["decision","constraint"](p2, routes=research/rag/critic)
+  classify     → seg1=["correction"](p0), seg2=["claim"](p2, routes=research/rag/critic)
   correction   → target "네이버·카카오" → "네이버" (correction_log에 기록)
   clarify_gate → p1 없고 p2 있음 → "dispatch"
   dispatch     → seg2 canonical을 research·rag·critic 병렬 호출 → validation_reports 누적
