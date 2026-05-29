@@ -67,9 +67,7 @@ class Segment(TypedDict, total=False):
     utterance_types: list[UtteranceType] # 다중 라벨: ["claim"] (주장이면서 질문이면 ["claim","question"])
     in_scope: bool                       # 사업 계획과 관련 있는 발화인가. False면(무맥락 사실·잡담·무관 요청) classify가 routes=["none"]로 막고 integrator가 부드럽게 리다이렉트. 기본 True(애매하면 통과 — 과차단 방지).
     target_slot: str | None              # 들어갈 슬롯(있으면): "target"
-    routes: list[Route]                  # 발동 워커: ["research","rag","critic"]
-    # 0=correction, 1=clarification, 2=dispatch(claim/question), 3=opinion/meta
-    priority: int
+    routes: list[Route]                  # 발동 워커: ["research","rag","critic"]. 처리 우선순위·분기는 routes/utterance_types에서 직접 파생(별도 priority 필드 없음).
 
 
 class Correction(TypedDict):

@@ -16,7 +16,7 @@ worked example
     1. text="게임 시장 포화고"            canonical="한국 게임 시장이 포화 상태다"           hints=[]
     2. text="일본에서 통할 거 같아"        canonical="웹툰 IP가 일본 시장에서 통할 것이다"     hints=[]
     3. text="'신사업'이 추상적이긴 해"     canonical="'신사업'이라는 방향이 아직 추상적이다"   hints=["clarification"]
-  (1·2의 본분류는 classify가 claim으로 채움. 3은 여기서 priority=1로 확정.)
+  (1·2의 본분류는 classify가 claim으로 채움. 3은 여기서 clarification_needed로 박음.)
 """
 from __future__ import annotations
 
@@ -38,6 +38,22 @@ _SYSTEM = """오케스트레이터 세그멘테이션
 3. target_slot_hint: 아래 10개 슬롯 중 하나 또는 null.
    problem, target, solution, market, advantage, revenue, goal, resources, milestones, risks
 4. hints: 다음 중 해당하는 것만 배열로 — "correction"(아니/말고/빼자/사실은 등), "meta"(다음/그만/뽑아 등), "clarification"(모호/추상), "question"(사용자가 물어봄).
+
+맥락 복원 핵심: [현재 슬롯]·[최근 대화]를 근거로 대명사·지시어("그거","거기","그쪽")·생략된 주어/대상을 모두 채운다. 한 발화에 여러 의미 단위가 있으면 쪼개고, 단일하면 1개만 낸다.
+
+예시 (이전 맥락: 사용자가 "웹툰 IP 신사업", 타겟 "네이버·카카오"를 언급한 상태):
+입력: "카카오는 빼고, 통할 거 같아."
+출력:
+  1. text="카카오는 빼고"   canonical_text="타겟에서 카카오를 뺀다"   target_slot_hint="target"  hints=["correction"]
+  2. text="통할 거 같아"     canonical_text="웹툰 IP가 일본 시장에서 통할 것이다"  target_slot_hint="market"  hints=[]
+
+입력: "그거 시장 규모는 어떻게 돼?"
+출력:
+  1. text="그거 시장 규모는 어떻게 돼?"  canonical_text="웹툰 IP 신사업의 시장 규모는 어느 정도인가?"  target_slot_hint="market"  hints=["question"]
+
+입력: "음 신사업이라기엔 좀 막연하네"
+출력:
+  1. text="신사업이라기엔 좀 막연하네"  canonical_text="'웹툰 IP 신사업'이라는 방향이 아직 막연하다"  target_slot_hint=null  hints=["clarification"]
 
 JSON만 출력. 다른 텍스트 금지."""
 
@@ -92,21 +108,16 @@ async def segment_node(state: PlanState) -> dict:
             "utterance_types": [],
             "target_slot": slot_hint,
             "routes": [],
-            "priority": 3,
         }
-        # hints는 classify가 참고할 수 있도록 임시로 routes에 안 들어가는 마커로 보존
+        # hints로 신호가 뚜렷한 4종만 미리 박는다. 본분류·라우팅은 classify가 한다.
         if "correction" in item.hints:
             seg["utterance_types"] = ["correction"]
-            seg["priority"] = 0
         elif "clarification" in item.hints:
             seg["utterance_types"] = ["clarification_needed"]
-            seg["priority"] = 1
         elif "question" in item.hints:
             seg["utterance_types"] = ["question"]
-            seg["priority"] = 2
         elif "meta" in item.hints:
             seg["utterance_types"] = ["meta"]
-            seg["priority"] = 3
         segments.append(seg)
 
     if not segments:
@@ -117,7 +128,6 @@ async def segment_node(state: PlanState) -> dict:
                 "utterance_types": [],
                 "target_slot": None,
                 "routes": [],
-                "priority": 3,
             }
         )
     return {"turn_segments": segments}

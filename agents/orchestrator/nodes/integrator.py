@@ -3,12 +3,13 @@
 한 턴에 여러 처리가 동시에 났어도 응답은 한꺼번에 다 던지지 않는다(기획서 6장
 '응답 통합 방식'): 명확화가 있으면 그것만 묻고 검증은 백그라운드로 미루고,
 없으면 검증 진행 통지 + 다음 질문 1개. conversation_node가 만든 pending_question과
-segment priority만 보고 조합.
+세그먼트의 routes(clarify=명확화, 워커 라우트=백그라운드 검증)만 보고 조합.
 
 worked example
 --------------
-세그먼트: [clarification "신사업이 추상적", claim(p2) "게임 시장 포화",
-          claim(p2) "일본서 통할 것"]
+세그먼트: [clarification "신사업이 추상적"(routes=clarify),
+          claim "게임 시장 포화"(routes=research/rag/critic),
+          claim "일본서 통할 것"(routes=research/rag/critic)]
 → pending_question:
     "먼저 명확히 — 신사업이 추상적 이 부분 조금만 풀어주실래요?
      (한국 게임 시장 포화, 웹툰 IP 일본 통함 쪽은 백그라운드에서 같이 찾아볼게요.)"
@@ -21,6 +22,8 @@ from __future__ import annotations
 
 from common.schema import PlanState
 
+_WORKER_ROUTES = frozenset({"research", "rag", "critic"})
+
 
 def response_integrator_node(state: PlanState) -> dict:
     segments = state.get("turn_segments") or []
@@ -28,14 +31,14 @@ def response_integrator_node(state: PlanState) -> dict:
 
     clarifications: list[str] = []
     for seg in segments:
-        if seg.get("priority") == 1:
+        if "clarify" in (seg.get("routes") or []):
             text = (seg.get("canonical_text") or seg.get("text", "")).strip()
             if text:
                 clarifications.append(text)
 
     dispatch_subjects: list[str] = []
     for seg in segments:
-        if seg.get("priority") == 2 and seg.get("routes"):
+        if _WORKER_ROUTES & set(seg.get("routes") or []):
             text = (seg.get("canonical_text") or seg.get("text", "")).strip()
             if text:
                 dispatch_subjects.append(text)
