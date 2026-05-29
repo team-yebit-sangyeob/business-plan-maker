@@ -2,6 +2,11 @@
 
 spec v0.7.5: "검증" 단계는 사라지고 비평·리서치·RAG 호출로 분기.
 비평(Critic)은 라벨링된 발화 + 슬롯 상태(read-only)를 함께 받는다.
+
+NOTE(정합성): critic_spec은 비평 정합성 모드가 리서치/RAG 결과(research_report·
+rag_context)를 입력으로 받는다고 정의한다(§6: 리서치·RAG 병렬 → 비평 후속).
+현재 stub은 셋을 모두 동시 호출하고 run_critic에 slots만 넘긴다 — 비평을 실제
+구현할 때 2단계(리서치·RAG 먼저 → 결과를 critic 입력으로)로 분리해야 한다.
 """
 from __future__ import annotations
 

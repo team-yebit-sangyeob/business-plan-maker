@@ -6,6 +6,17 @@
             ├ dispatch+fills 경로   (priority=2 발견 → 리서치/RAG/비평 호출)
             └ skip 경로             (명확화 우선)
           → gate → conversation → integrator → END
+
+end-to-end trace 예시 (turn 5, "카카오는 빼자. 예산은 1억으로 가자."):
+  segment      → [seg1 "카카오는 빼자"(hints=correction), seg2 "예산 1억으로 가자"]
+  classify     → seg1=["correction"](p0), seg2=["decision","constraint"](p2, routes=research/rag/critic)
+  correction   → target "네이버·카카오" → "네이버" (correction_log에 기록)
+  clarify_gate → p1 없고 p2 있음 → "dispatch"
+  dispatch     → seg2 canonical을 research·rag·critic 병렬 호출 → validation_reports 누적
+  extract_fills→ 빈 슬롯에 "예산 1억" 채울 수 있으면 resources 등에 반영
+  gate         → "가자"는 출력요청 아님 → output_request=None
+  conversation → 다음 빈 필수/선택 슬롯 1개 질문 생성
+  integrator   → 검증 백그라운드 통지 + 그 질문을 한 문단으로 → pending_question
 """
 from __future__ import annotations
 

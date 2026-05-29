@@ -1,4 +1,4 @@
-"""슬롯 9개 + 턴 처리 상태 (LangGraph PlanState)."""
+"""슬롯 10개(필수 3 + 선택 7) + 턴 처리 상태 (LangGraph PlanState)."""
 from __future__ import annotations
 
 from typing import Literal, TypedDict
@@ -63,7 +63,7 @@ class Segment(TypedDict, total=False):
     utterance_types: list[UtteranceType] # 다중 라벨: ["hypothesis"] (결정+제약이면 ["decision","constraint"])
     target_slot: str | None              # 들어갈 슬롯(있으면): "target"
     routes: list[Route]                  # 발동 워커: ["research","rag","critic"]
-    # 0=correction, 1=clarification, 2=dispatch(fact/hypothesis/decision/constraint), 3=opinion/meta
+    # 0=correction, 1=clarification, 2=dispatch(fact/hypothesis/decision/constraint/question), 3=opinion/meta
     priority: int
 
 

@@ -23,6 +23,12 @@ _SLOT_TITLES = {
 
 
 def _render_slot(name: str, slot: dict) -> str:
+    """슬롯 1개 → 마크다운 섹션. 출처 라벨을 인용구로 인라인(두 달 뒤 출처 구분용).
+
+    예: ("market", {"value":"국내 웹툰 1.8조", "source_label": RESEARCH}) →
+        "### 시장 근거\n\n> 리서치 결과\n\n국내 웹툰 1.8조\n"
+    빈 슬롯이면 value="[미정]", 라벨="[미정]"(EMPTY).
+    """
     title = _SLOT_TITLES[name]
     value = slot.get("value") or "[미정]"
     label = SourceLabel(slot.get("source_label", SourceLabel.EMPTY)).korean
@@ -30,6 +36,16 @@ def _render_slot(name: str, slot: dict) -> str:
 
 
 def compose_markdown(state: PlanState) -> str:
+    """슬롯 10개 → 계획서 마크다운(필수 3 + 보강 7 두 섹션). 결정론(LLM 0).
+
+    출력 골격:
+        # 사업 계획서 (초안)
+        _생성: 2026-05-29 14:30_
+        ## 필수 항목
+        ### 문제 정의 / > 사용자 입력 / ...
+        ## 보강 항목
+        ### 솔루션 / > 후보 선택 / ...   (빈 항목은 [미정])
+    """
     slots = state.get("slots") or {}
     timestamp = datetime.now().strftime("%Y-%m-%d %H:%M")
 

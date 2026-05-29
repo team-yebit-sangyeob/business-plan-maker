@@ -1,8 +1,22 @@
-"""세그멘테이션 — 긴 발화를 의미 단위로 분해 + 맥락 복원 (Fig.0).
+"""세그멘테이션 — 긴 발화를 의미 단위로 분해 + 맥락 복원 (Fig.0 첫 단계).
 
 이전 턴 messages와 현재 슬롯 스냅샷을 같이 LLM에 넣어서, 각 조각이
 자기충족 문장(canonical_text)으로 다시 쓰이게 한다. 다운스트림 클러스터의
 쿼리 분해기가 그 문장만 받아도 검색 쿼리를 만들 수 있어야 함.
+
+여기서는 분류를 끝내지 않는다 — hints로 신호가 뚜렷한 4종(correction/clarification/
+question/meta)만 미리 박고, 나머지 본분류(opinion/decision/...)는 classify_node가 한다.
+
+worked example
+--------------
+이전 맥락: 사용자가 앞서 "웹툰 IP 신사업"을 언급함.
+이번 턴 user_input:
+    "게임 시장 포화고, 일본에서 통할 거 같아. 근데 '신사업'이 좀 추상적이긴 해."
+→ segments (3개):
+    1. text="게임 시장 포화고"            canonical="한국 게임 시장이 포화 상태다"           hints=[]
+    2. text="일본에서 통할 거 같아"        canonical="웹툰 IP가 일본 시장에서 통할 것이다"     hints=[]
+    3. text="'신사업'이 추상적이긴 해"     canonical="'신사업'이라는 방향이 아직 추상적이다"   hints=["clarification"]
+  (1·2의 본분류는 classify가 fact_claim·hypothesis로 채움. 3은 여기서 priority=1로 확정.)
 """
 from __future__ import annotations
 

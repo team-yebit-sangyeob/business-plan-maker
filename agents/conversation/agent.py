@@ -1,6 +1,19 @@
 """대화 에이전트 — 오케가 결정한 "어느 슬롯·어떤 의도"를 자연어 한 문장으로.
 
-기존 휴리스틱 프롬프트는 few-shot 예시로 LLM에 주입.
+판단은 안 한다(무엇을 물을지는 오케 결정) — 표현만 한다. 채울 슬롯을 고르는 규칙은
+결정론(필수 미달 우선 → 선택 → 다 차면 출력 권유), 문장 생성만 LLM.
+
+NOTE(정합성): conversation_spec은 8+종 intent(ASK_SLOT·CLARIFY·REPORT_CRITIQUE·
+REPORT_RESEARCH·PRESENT_CANDIDATES·REJECT_OUTPUT·DELIVER_PLAN·ACKNOWLEDGE)를 정의하지만,
+현 stub은 슬롯 질문 + type0 거절만 처리(mode: required/optional/type0_reject).
+나머지 intent는 워커(비평/리서치/후보)·Planner 연결 시 확장.
+
+worked example
+--------------
+output_request=None, 필수 [target,goal] 빔 → mode="required", target_slot="target"
+  → "타겟이 누구예요? — 어느 회사가 아니라 그 안에서 도장 찍는 사람·부서·규모까지."
+output_request="type0", 필수 [goal] 빔 → mode="type0_reject"
+  → "지금 뽑으면 메모지 수준이에요. goal만 정하면 바로 출력 가능 — 언제까지 얼마부터 정해볼까요?"
 """
 from __future__ import annotations
 

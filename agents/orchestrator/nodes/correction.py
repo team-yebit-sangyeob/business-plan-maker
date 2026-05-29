@@ -1,11 +1,24 @@
-"""정정 처리 + 슬롯 채움 — LLM 기반 (Case E).
+"""정정 처리 + 슬롯 채움 — LLM 기반 (기획서 Case E).
 
 correction_node: utterance_types에 correction 포함 세그먼트만 모아 LLM에 넘김.
   현재 슬롯·correction_log·최근 messages를 보고 "어느 슬롯의 어떤 값을 어떻게"
-  바꿀지 판단.
+  바꿀지 판단. action은 replace(교체)/clear(비움)/ignore(모호하면 건너뜀).
 
-extract_slot_fills_node: 정정 이후 단계에서, 검증·결정·제약 세그먼트 중
-  비어 있는 슬롯에 들어갈 값만 골라 채움.
+  예: 슬롯 solution="B2B 감수 서비스" 상태에서
+      "아 그냥 감수 말고 AI 자동 검수 툴로 바꾸자"
+      → action: replace solution = "AI 자동 검수 툴"
+      → correction_log += {slot:"solution", previous:"B2B 감수 서비스",
+                           new:"AI 자동 검수 툴", turn:5}
+      (target·goal 등 다른 슬롯은 그대로 — 부분 롤백)
+
+  예: 슬롯 target="네이버·카카오" 상태에서 "카카오는 빼자"
+      → action: replace target = "네이버" (또는 맥락상 clear)
+
+extract_slot_fills_node: 정정 이후 단계에서, 검증/결정/제약/가설/의견 세그먼트 중
+  '비어 있는' 슬롯에 명백히 들어맞는 값만 골라 채움(이미 찬 슬롯은 안 건드림).
+
+  예: 빈 슬롯 [target, goal] + 세그먼트 "(decision) 타겟은 네이버 콘텐츠 운영팀"
+      → fills: target = "네이버 콘텐츠 운영팀" (source=user). goal은 근거 없으면 그대로 빔.
 """
 from __future__ import annotations
 

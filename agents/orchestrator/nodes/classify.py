@@ -1,7 +1,23 @@
-"""세그먼트 다중 라벨 분류 + 라우팅 결정 (5장 matrix).
+"""세그먼트 다중 라벨 분류 + 라우팅 결정 (기획서 5장 matrix).
 
-LLM이 utterance_types(다중)를 결정 → derive_routes로 라우팅을 결정론 검증.
-LLM이 matrix를 어기면 derive_routes 결과로 덮어쓴다.
+흐름: segment_node가 만든 세그먼트마다 LLM이 발화 유형(다중 가능)을 고르고,
+derive_routes/derive_priority가 그 라벨을 결정론적으로 워커 라우트·우선순위로
+변환한다. LLM이 matrix를 어겨도 최종 routes는 derive_routes가 강제한다
+(LLM은 '무슨 유형인가'만, '누구를 부를까'는 코드가 결정).
+
+worked example
+--------------
+입력 세그먼트 canonical_text:
+    "웹툰 IP가 일본 시장에서 통할 것이다"
+LLM utterance_types →  ["hypothesis"]
+derive_routes      →  ["research", "rag", "critic"]   # 전제는 검색, 회사 적합성은 RAG, 비약은 비평
+derive_priority    →  2                                # 검증 필요 = dispatch 단계
+
+입력 세그먼트:
+    "타겟은 네이버로 정했고 예산은 1억"
+LLM utterance_types →  ["decision", "constraint"]      # 한 문장에 두 유형
+derive_routes      →  ["research", "rag", "critic"]    # 두 유형의 라우트 합집합
+derive_priority    →  2
 """
 from __future__ import annotations
 
@@ -65,17 +81,31 @@ _VALID_TYPES: set[str] = set(_ROUTE_MATRIX.keys())
 
 
 def derive_routes(utterance_types: list[str]) -> list[Route]:
+    """다중 라벨 → 발동 워커 라우트(합집합). 매트릭스가 단일 출처.
+
+    예: ["decision","constraint"] → {research,rag,critic} 합쳐서
+        ["research","rag","critic"] (order대로 정렬).
+        ["meta"] → 라우트 없음 → ["none"].
+    """
     routes: set[Route] = set()
     for t in utterance_types:
         routes |= _ROUTE_MATRIX.get(t, set())
     if not routes:
         return ["none"]
-    # 안정적 정렬
+    # 안정적 정렬 — 같은 라벨 집합이면 항상 같은 순서로 나오게(테스트·캐시 친화)
     order: list[Route] = ["clarify", "research", "rag", "critic", "none"]
     return [r for r in order if r in routes]
 
 
 def derive_priority(utterance_types: list[str]) -> int:
+    """다중 라벨 → 턴 내 처리 우선순위(낮을수록 먼저). 기획서 6장 우선순위 규칙.
+
+    한 세그먼트에 여러 유형이 섞이면 가장 급한 것을 따른다(정정 > 명확화 > 검증 > 가벼움).
+    예: ["correction","decision"]        → 0  (상태부터 맞춰야 하므로 정정 우선)
+        ["clarification_needed"]          → 1  (모호한 채 검증하면 엉뚱한 걸 검증)
+        ["decision"] / ["question"]       → 2  (리서치·RAG·비평 디스패치 대상)
+        ["opinion"] / ["meta"]            → 3  (가벼움, 마지막)
+    """
     if "correction" in utterance_types:
         return 0
     if "clarification_needed" in utterance_types:
@@ -102,7 +132,9 @@ async def classify_node(state: PlanState) -> dict:
     llm_items = out.items if len(out.items) == len(segments) else None
 
     for idx, seg in enumerate(segments):
-        # segment 노드가 미리 박은 라벨(correction/clarify/meta)이 있으면 보존
+        # segment 노드가 hints로 미리 박은 라벨(correction/clarification_needed/question/meta)은
+        # 신뢰도가 높아 보존하고, classify LLM 결과를 그 위에 합친다.
+        # 예: segment가 ["correction"]을 박고 LLM이 ["decision"]을 더하면 → ["correction","decision"]
         prior = list(seg.get("utterance_types") or [])
         types: list[str] = list(prior)
         if llm_items is not None:
@@ -110,8 +142,10 @@ async def classify_node(state: PlanState) -> dict:
                 if t in _VALID_TYPES and t not in types:
                     types.append(t)
         if not types:
-            types = ["opinion"]  # 안전 기본값
-        # 타입 캐스팅
+            # LLM 개수 불일치(llm_items=None)이거나 빈 결과일 때의 안전 기본값.
+            # opinion은 RAG+비평만 타서(리서치 비용 0) 오분류 시 가장 피해가 적다.
+            types = ["opinion"]
+        # 알 수 없는 라벨은 버리고(타입 캐스팅), routes·priority는 코드가 매트릭스로 재계산
         seg["utterance_types"] = [t for t in types if t in _VALID_TYPES]  # type: ignore[assignment]
         seg["priority"] = derive_priority(seg["utterance_types"])
         seg["routes"] = derive_routes(seg["utterance_types"])
