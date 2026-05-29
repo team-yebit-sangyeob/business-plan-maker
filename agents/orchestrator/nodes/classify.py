@@ -55,7 +55,7 @@ _ROUTE_MATRIX: dict[str, set[Route]] = {
     "hypothesis": {"research", "rag", "critic"},
     "decision": {"research", "rag", "critic"},
     "constraint": {"research", "rag", "critic"},  # 리서치△=예산·기한이 업계 평균 대비 현실적인지(T.02)
-    "question": {"research"},  # 사용자 정보 요청 → 리서치가 답을 찾아옴
+    "question": {"research", "rag"},  # 외부 사실이면 리서치, 회사 내부 사안이면 RAG (둘 다 발동, 답 찾은 쪽이 응답)
     "correction": set(),  # correction 노드가 처리
     "meta": set(),
 }
