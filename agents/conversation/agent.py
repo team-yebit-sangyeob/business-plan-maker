@@ -6,10 +6,10 @@ goal(필수)도 solution·market·advantage·revenue 뒤에 물어진다 — 솔
 모르면 현실적 목표 수치가 안 나오므로. 다만 출력 요청인데 필수 미달이면(type0) 막은
 필수 슬롯을 콕 집어 거절. 문장 생성만 LLM.
 
-NOTE(정합성): conversation_spec은 8+종 intent(ASK_SLOT·CLARIFY·REPORT_CRITIQUE·
-REPORT_RESEARCH·PRESENT_CANDIDATES·REJECT_OUTPUT·DELIVER_PLAN·ACKNOWLEDGE)를 정의하지만,
+NOTE(정합성): conversation_spec은 여러 intent(ASK_SLOT·CLARIFY·REPORT_CRITIQUE·
+REPORT_RESEARCH·ANSWER_QUESTION·REDIRECT·REJECT_OUTPUT·DELIVER_PLAN·ACKNOWLEDGE)를 정의하지만,
 현 stub은 슬롯 질문 + type0 거절만 처리(mode: required/optional/type0_reject).
-나머지 intent는 워커(비평/리서치/후보)·Planner 연결 시 확장.
+나머지 intent는 워커(비평/리서치)·Planner 연결 시 확장.
 
 worked example
 --------------

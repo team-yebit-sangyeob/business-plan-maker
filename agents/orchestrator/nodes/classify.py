@@ -10,9 +10,9 @@ worked example
 입력 세그먼트 canonical_text:
     "웹툰 IP가 일본 시장에서 통할 것이다"
 LLM utterance_types →  ["claim"]
-derive_claim_type  →  "hypothesis_premise"            # 가설 결론이 아닌, 받치는 전제를 검증
 derive_routes      →  ["research", "rag", "critic"]   # 전제는 검색, 회사 적합성은 RAG, 비약은 비평
 derive_priority    →  2                                # 검증 필요 = dispatch 단계
+(주장을 어떻게 분해·검증할지는 리서치 클러스터의 쿼리 분해기 몫 — 오케는 라우팅까지만)
 
 입력 세그먼트:
     "웹툰 시장 규모가 어떻게 돼? 그리고 타겟은 네이버로 가자"
@@ -25,7 +25,7 @@ from __future__ import annotations
 from pydantic import BaseModel, Field
 
 from common.schema import PlanState
-from common.schema.state import ClaimType, Route, UtteranceType
+from common.schema.state import Route, UtteranceType
 from agents.orchestrator.llm import call_json
 
 
@@ -42,19 +42,14 @@ _SYSTEM = """오케스트레이터 다중라벨 분류
 
 여러 유형이 한 세그먼트에 동시에 해당할 수 있다 — 예: "시장 규모 어때? 타겟은 네이버로 가자" 같은 한 문장이면 question+claim. 검증할 게 없는 주관 선호면 opinion 단독으로 둔다.
 
-claim_type (utterance_types에 "claim"이 있을 때만 채우고, 없으면 null):
-- fact: 검증 가능한 외부 사실 (예: "게임 시장 포화 상태래")
-- hypothesis_premise: 가설을 받치는 검증 가능한 전제 (예: "일본 웹툰 시장 성장 중"). 가설 결론 자체("우리 IP가 통할 거야")는 검증 대상이 아니다 — 받치는 전제만 고른다.
-- decision_context: 결정의 배경이 되는 사실 (예: "타겟은 네이버로 가자" → "네이버 콘텐츠 운영 조직 현황")
-- market_fill: 자동 채움 맥락에서 시장 규모·근거를 찾는 경우
-claim이 여러 성격을 겸하면 가장 핵심인 하나만 고른다.
-
 구분 가이드 — 헷갈리는 경계:
-- claim vs opinion: 외부 데이터·회사 자료로 맞다/틀리다를 따질 수 있으면 claim, 순수 취향·가치판단이면 opinion.
-  · "B2B 시장이 더 커" → claim (시장 규모는 검증 가능)
+- claim vs opinion: 핵심 발화가 참/거짓을 따질 사실 주장이면 claim, 가치판단·선호면 opinion.
+  의견의 근거도 RAG·비평으로 점검되지만 근거의 검증 가능성은 분류를 가르지 않는다 — 둘의 라우팅 차이는 리서치(외부 웹) 발동 여부뿐.
+  · "B2B 시장이 더 커" → claim (시장 규모는 외부 사실)
   · "난 B2B가 더 끌려" → opinion (주관)
-  · "B2B가 우리 색깔에 맞아, 영업 인프라도 강하니까" → opinion (근거를 댔어도 '우리 색깔'은 취향 판단 — 단, 근거의 사실 여부는 회사 자료로 비평이 따짐)
-  · "타겟은 네이버로 가자" → claim (결정 = 향후 슬롯에 박히는 약속, decision_context)
+  · "B2B가 우리 색깔에 맞아, 영업 인프라도 강하니까" → opinion ('우리 색깔'은 가치판단 — 근거('영업 인프라 강함')는 RAG가 따지지만 라벨은 opinion)
+  · "타겟은 네이버로 가자" → claim (결정 = 향후 슬롯에 박히는 약속)
+  · 단, 슬롯 통과조건 미달의 모호한 답변("월 매출 잘 나오게")은 claim이 아니라 clarification_needed로 우선 라벨.
 - correction은 '이전에 정한 것을 무르거나 바꿀 때'만. 정정 키워드가 있어도 새 진술이면 claim:
   · "아 카카오는 빼자" → correction (앞서 넣은 타겟을 무름)
   · "네이버 말고 카카오로 가자" → correction (대상 교체)
@@ -63,6 +58,19 @@ claim이 여러 성격을 겸하면 가장 핵심인 하나만 고른다.
 - 한 세그먼트 다중 라벨 예:
   · "시장 규모 어때? 그리고 타겟은 네이버로 가자" → ["question","claim"]
   · "그건 취소하고, 일본 시장은 성장 중이잖아" → ["correction","claim"]
+
+in_scope (이 세그먼트가 '사용자의 사업 계획을 세우는 것'과 관련 있는가, 불리언):
+- true: 문제·고객·솔루션·시장·차별점·수익·목표·자원·일정·리스크에 관한 발화, 회사 자료를 묻는 질문, 계획 진행/출력 신호 등 — 계획에 기여하거나 계획에 필요한 정보를 묻는 것.
+- false: 계획과 무관한 무맥락 발화 — 일반 상식·산술("1+1은 2이다"), 잡담("오늘 날씨 어때"), 계획과 상관없는 코딩·번역·기타 요청.
+- 애매하면 true. 과도하게 막지 않는다(사용자 발화를 함부로 무시하지 않음).
+- false여도 utterance_types는 형식상 평소대로 채운다 — 워커 차단·리다이렉트는 코드가 한다.
+예:
+  · "게임 시장 포화 상태래" → in_scope:true
+  · "우리 회사 일본 진출한 적 있어?" → in_scope:true (회사 자료 질문)
+  · "응 다음으로 넘어가자" → in_scope:true (진행 신호)
+  · "1+1은 2이다" → in_scope:false
+  · "오늘 서울 날씨 어때?" → in_scope:false
+  · "파이썬 데코레이터 설명해줘" → in_scope:false
 
 priority:
 - 0: correction 포함
@@ -76,7 +84,7 @@ JSON만 출력."""
 class ClassifyItem(BaseModel):
     canonical_text: str
     utterance_types: list[str] = Field(default_factory=list)
-    claim_type: str | None = None  # "claim" 유형일 때만 의미, 그 외 무시
+    in_scope: bool = True  # 사업 계획과 관련 있는 발화인가. 기본 True(애매하면 통과)
 
 
 class ClassifyOut(BaseModel):
@@ -96,28 +104,6 @@ _ROUTE_MATRIX: dict[str, set[Route]] = {
 
 
 _VALID_TYPES: set[str] = set(_ROUTE_MATRIX.keys())
-
-_VALID_CLAIM_TYPES: set[str] = {
-    "fact",
-    "hypothesis_premise",
-    "decision_context",
-    "market_fill",
-}
-
-
-def derive_claim_type(
-    utterance_types: list[str], raw_claim_type: str | None
-) -> ClaimType | None:
-    """claim 세그먼트에만 claim_type을 부여(검증). 그 외 유형이면 None.
-
-    LLM이 claim인데 claim_type을 안 주거나 알 수 없는 값이면 "fact"로 보수 처리
-    — 리서치가 일반 사실 검증으로 다루는 게 오분류 시 가장 안전(전제 누락보다 낫다).
-    """
-    if "claim" not in utterance_types:
-        return None
-    if raw_claim_type in _VALID_CLAIM_TYPES:
-        return raw_claim_type  # type: ignore[return-value]
-    return "fact"
 
 
 def derive_routes(utterance_types: list[str]) -> list[Route]:
@@ -186,7 +172,15 @@ async def classify_node(state: PlanState) -> dict:
         seg["utterance_types"] = [t for t in types if t in _VALID_TYPES]  # type: ignore[assignment]
         seg["priority"] = derive_priority(seg["utterance_types"])
         seg["routes"] = derive_routes(seg["utterance_types"])
-        raw_ct = llm_items[idx].claim_type if llm_items is not None else None
-        seg["claim_type"] = derive_claim_type(seg["utterance_types"], raw_ct)
+
+        # 스코프 가드 — 무맥락/잡담은 워커를 코드가 막는다. LLM이 매트릭스대로
+        # claim→research를 줘도, in_scope=false면 routes를 ["none"]으로 덮어쓴다
+        # ("LLM은 무슨 발화인지/관련 있는지만, 누구를 부를지는 코드"라는 분리 유지).
+        # 개수 불일치(llm_items=None)면 보수적으로 in_scope=true(과차단 방지).
+        in_scope = llm_items[idx].in_scope if llm_items is not None else True
+        seg["in_scope"] = in_scope
+        if not in_scope:
+            seg["routes"] = ["none"]  # 리서치·RAG·비평 디스패치 안 됨
+            seg["priority"] = 3       # 가볍게 마지막 (clarify/dispatch 분기 안 탐)
 
     return {"turn_segments": segments}

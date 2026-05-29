@@ -40,7 +40,14 @@ def response_integrator_node(state: PlanState) -> dict:
             if text:
                 dispatch_subjects.append(text)
 
+    # 스코프 밖(무맥락·잡담) 세그먼트가 하나라도 있으면 부드럽게 되돌린다.
+    # classify가 이미 routes=["none"]로 워커를 막았으므로 여기선 표현만 — 거절이 아니라
+    # 다음 질문으로 자연스럽게 흐름을 잇는다(순수 off-topic 턴이면 base_question만 남음).
+    has_off_topic = any(seg.get("in_scope") is False for seg in segments)
+
     parts: list[str] = []
+    if has_off_topic:
+        parts.append("그건 지금 짜는 사업 계획과는 좀 떨어진 얘기 같아 그쪽은 넘어갈게요.")
     if clarifications:
         parts.append(
             "먼저 명확히 — " + " / ".join(clarifications[:2])

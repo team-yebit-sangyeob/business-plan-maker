@@ -53,13 +53,16 @@ def _is_question(text: str) -> bool:
     return text.strip().endswith("?") or any(k in text for k in _QUESTION_KW)
 
 
-# claim 휴리스틱 — 사실·가설·결정·제약을 모두 claim 단일 라벨로(9→6 통합).
-# 세부 구분(claim_type)은 _claim_type가 같은 그룹으로 본다.
+# claim 휴리스틱 — 사실·가설·결정·제약을 모두 claim 단일 라벨로 본다.
 _FACT_KW = ("포화", "시장", "추세", "통계", "점유", "규모", "성장 중")
 _HYPOTHESIS_KW = ("통할", "될 거", "거 같", "가능성", "예상", "듯")
 _DECISION_KW = ("정했", "하자", "가자", "결정", "타겟은", "으로 간다")
 _CONSTRAINT_KW = ("예산", "개월", "억", "만원", "%", "인력", "명까지")
 _CLAIM_KW = _FACT_KW + _HYPOTHESIS_KW + _DECISION_KW + _CONSTRAINT_KW
+
+
+# 위 _FACT_KW/_HYPOTHESIS_KW/_DECISION_KW는 claim 라벨 판정용 키워드 묶음일 뿐 —
+# 주장의 세부 분류(어떻게 검증할지)는 리서치 쿼리 분해기 몫이라 오케는 따지지 않는다.
 
 
 def _utterance_label(text: str) -> str:
@@ -74,19 +77,17 @@ def _utterance_label(text: str) -> str:
     return "opinion"
 
 
-def _claim_type(text: str) -> str | None:
-    """claim 세그먼트의 세부 유형 휴리스틱. claim_type 검증 셋과 일치.
+# 스코프 휴리스틱(데모 전용) — 계획과 무관한 무맥락/잡담만 false. 애매하면 true.
+_OFFTOPIC_KW = ("날씨", "몇 시", "점심 뭐", "운세", "로또", "번역해줘", "데코레이터")
+_ARITH_RE = re.compile(r"\d+\s*[+\-*/×÷]\s*\d+")
 
-    제약(예산·인력 등)은 외부 검증 대상이 아니라 보통 RAG 몫이지만, claim 라벨이
-    붙은 이상 리서치 기본값 "fact"로 둔다(derive_claim_type 보수 처리와 동일).
-    """
-    if any(k in text for k in _HYPOTHESIS_KW):
-        return "hypothesis_premise"
-    if any(k in text for k in _DECISION_KW):
-        return "decision_context"
-    if any(k in text for k in _FACT_KW) or any(k in text for k in _CONSTRAINT_KW):
-        return "fact"
-    return None
+
+def _in_scope(text: str) -> bool:
+    if _ARITH_RE.search(text):
+        return False
+    if any(k in text for k in _OFFTOPIC_KW):
+        return False
+    return True
 
 
 def _split_sentences(text: str) -> list[str]:
@@ -127,10 +128,7 @@ def _classify(system: str, user: str) -> dict:
     items = []
     for t in lines:
         label = _utterance_label(t)
-        item = {"canonical_text": t, "utterance_types": [label]}
-        if label == "claim":
-            item["claim_type"] = _claim_type(t)
-        items.append(item)
+        items.append({"canonical_text": t, "utterance_types": [label], "in_scope": _in_scope(t)})
     return {"items": items}
 
 
@@ -152,10 +150,8 @@ def _slot_fill(system: str, user: str) -> dict:
 
 
 def _intent(system: str, user: str) -> dict:
-    text = user
-    wants_autofill = any(k in text for k in ("알아서", "자동", "채워", "마무리해"))
-    wants_output = any(k in text for k in ("뽑아", "출력", "생성", "만들어", "정리해", "그만"))
-    return {"wants_output": wants_output or wants_autofill, "wants_autofill": wants_autofill}
+    wants_output = any(k in user for k in ("뽑아", "출력", "생성", "만들어", "정리해", "그만"))
+    return {"wants_output": wants_output}
 
 
 _SLOT_Q = {

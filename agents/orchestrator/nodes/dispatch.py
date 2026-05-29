@@ -36,10 +36,9 @@ async def parallel_dispatch_workers_node(state: PlanState) -> dict:
         subject = seg.get("canonical_text") or seg.get("text", "")
         if not subject.strip():
             continue
-        claim_type = seg.get("claim_type")
         for route in seg.get("routes") or []:
             if route == "research":
-                tasks.append(asyncio.create_task(run_research(subject, claim_type)))
+                tasks.append(asyncio.create_task(run_research(subject)))
             elif route == "rag":
                 tasks.append(asyncio.create_task(run_rag_check(subject)))
             elif route == "critic":

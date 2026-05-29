@@ -15,14 +15,14 @@ from common.schema.labels import SourceLabel
 ALL_SLOTS: tuple[str, ...] = (
     "problem",     # 문제: "웹툰 신작 공개 후 3~5일 내 성 감수성 논란 1건+, 30%가 휴재로"  [필수]
     "target",      # 타겟: "네이버·카카오 콘텐츠 운영팀(5~10명), 의사결정자 콘텐츠본부장급"  [필수]
-    "solution",    # 솔루션(결정형): "B2B 감수 서비스" / "AI 자동 검수 툴"
-    "market",      # 시장 근거(데이터형): "국내 웹툰 시장 규모·경쟁사" — 리서치가 채움
-    "advantage",   # 차별점·경쟁우위(파생형): "외주 감수 대비 실시간·1/5 비용" — solution+market 뒤라야 나옴
-    "revenue",     # 수익 모델(결정형): "월 구독 SaaS" / "건당 컨설팅 피" — 후보 제시
+    "solution",    # 솔루션: "B2B 감수 서비스" / "AI 자동 검수 툴"
+    "market",      # 시장 근거: "국내 웹툰 시장 규모·경쟁사" — 리서치가 근거를 회수
+    "advantage",   # 차별점·경쟁우위: "외주 감수 대비 실시간·1/5 비용" — solution+market 뒤라야 나옴
+    "revenue",     # 수익 모델: "월 구독 SaaS" / "건당 컨설팅 피"
     "goal",        # 목표(필수): "6개월 유료 3개사·월 1,500만, 미달 시 재검토" — 솔루션·수익모델 뒤라야 현실적 숫자  [필수]
-    "resources",   # 필요 리소스(파생형): "감수 인력 2명·예산 1억"
-    "milestones",  # 마일스톤(파생형): "3개월 PoC → 6개월 첫 계약" — 추론 도출
-    "risks",       # 리스크(파생형): "내부 감수팀 보유 시 니즈 약함"
+    "resources",   # 필요 리소스: "감수 인력 2명·예산 1억"
+    "milestones",  # 마일스톤: "3개월 PoC → 6개월 첫 계약"
+    "risks",       # 리스크: "내부 감수팀 보유 시 니즈 약함"
 )
 
 # 출력 게이트 필수 3 — '셋 다 차야 출력'이라는 멤버십(기획서 3장). 질문 순서와 무관하다:
@@ -40,16 +40,6 @@ UtteranceType = Literal[
     "correction",            # 정정·취소 → 슬롯 덮어쓰기. 예: "아 카카오는 빼자"
     "question",              # 사용자 정보 요청 → 리서치(외부)·RAG(내부). 예: "웹툰 시장 규모가 어떻게 돼?"
     "meta",                  # 단순응답·진행 신호. 예: "응 다음", "여기까지 뽑아줘"
-]
-
-
-# claim 세그먼트의 세부 유형 — 리서치(VerificationRequest.claim_type)가 검증 강도/쿼리 분해에 사용.
-# claim 라벨이 붙은 세그먼트에만 의미가 있고, 그 외 유형엔 None.
-ClaimType = Literal[
-    "fact",                # 검증 가능한 외부 사실. 예: "게임 시장 포화"
-    "hypothesis_premise",  # 가설의 검증 가능한 전제. 예: "일본 웹툰 시장 성장 추세"(가설 자체는 비평 몫)
-    "decision_context",    # 결정의 배경 사실. 예: "네이버·카카오 콘텐츠 운영 조직 현황"
-    "market_fill",         # Type 3 자동 채움의 시장 근거. 더 엄격한 출처 기준 적용
 ]
 
 
@@ -75,7 +65,7 @@ class Segment(TypedDict, total=False):
     text: str                            # 원문 조각 그대로
     canonical_text: str                  # 맥락 복원된 자기충족 문장: "웹툰 IP가 일본 시장에서 통할 것이다"
     utterance_types: list[UtteranceType] # 다중 라벨: ["claim"] (주장이면서 질문이면 ["claim","question"])
-    claim_type: ClaimType | None         # "claim" 유형일 때만 세부 분류, 그 외 None. 리서치로 전달.
+    in_scope: bool                       # 사업 계획과 관련 있는 발화인가. False면(무맥락 사실·잡담·무관 요청) classify가 routes=["none"]로 막고 integrator가 부드럽게 리다이렉트. 기본 True(애매하면 통과 — 과차단 방지).
     target_slot: str | None              # 들어갈 슬롯(있으면): "target"
     routes: list[Route]                  # 발동 워커: ["research","rag","critic"]
     # 0=correction, 1=clarification, 2=dispatch(claim/question), 3=opinion/meta
@@ -139,5 +129,5 @@ class PlanState(TypedDict, total=False):
 
     pending_clarifications: list[str]
     pending_question: str
-    # 출력 요청 분기 결과 (8장 Type 0/1/2/3)
-    output_request: Literal["type0", "type1", "type2", "type3"] | None
+    # 출력 요청 분기 결과 (8장 Type 0/1/2)
+    output_request: Literal["type0", "type1", "type2"] | None
