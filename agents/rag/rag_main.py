@@ -7,10 +7,11 @@ rag_main.py
   1) 인라인 텍스트 모드 (기본): 아래 INPUT_TEXT에 문장을 직접 작성하여 실행
   2) JSON 파일 모드: INPUT_TEXT를 비워두면 INPUT_PATH의 JSON 파일을 로드
 
-[디버그 모드 (.env 또는 환경변수)]
-  DEBUG_SKIP_ROUTER=true  → decide_search_route를 건너뛰고 바로 rag_extractor로 전달
-  MAX_CLAIMS=N            → 처음 N개 claim만 처리 (JSON 파일 모드 한정)
-  VERBOSE=false           → 에이전트 상세 로그 숨김
+[환경변수]
+  MAX_CLAIMS=N   → 처음 N개 claim만 처리 (JSON 파일 모드 한정)
+  VERBOSE=false  → 에이전트 상세 로그 숨김
+
+검색 경로(web/internal) 결정은 상위 오케스트레이터에서 처리한다.
 """
 
 from __future__ import annotations
@@ -49,15 +50,9 @@ MAX_CLAIMS = int(os.getenv("MAX_CLAIMS", "0"))
 # 에이전트 실행 중 상세 로그 출력 여부
 VERBOSE = os.getenv("VERBOSE", "true").lower() == "true"
 
-# ─── 디버그 설정 ────────────────────────────────────────────────────────────────
-# claim_router_validation을 건너뛰고 rag_extractor로 직행할 때 True로 변경.
-# .env/환경변수 DEBUG_SKIP_ROUTER=true 설정으로도 동일하게 활성화된다.
-DEBUG_SKIP_ROUTER: bool = True  # ← 직접 켜고 끄려면 True/False로 변경
-DEBUG_SKIP_ROUTER = DEBUG_SKIP_ROUTER or os.getenv("DEBUG_SKIP_ROUTER", "false").lower() == "true"
-
 
 # ─── 모듈 임포트 ────────────────────────────────────────────────────────────────
-from claim_router_validation import run_router_pipeline, run_router_pipeline_for_claims, extract_claim_from_text
+from claim_router_validation import run_router_pipeline, extract_claim_from_text
 from rag_extractor import run_rag_extractor, FallbackRequired
 
 
@@ -88,11 +83,11 @@ def load_input(path: Path) -> dict:
 
 # ─── 결과 저장 함수 ─────────────────────────────────────────────────────────────
 
-def save_results(results: list, output_dir: Path, timestamp: str) -> Path:
+def save_results(payload: dict, output_dir: Path, timestamp: str) -> Path:
     """
-    처리 결과를 JSON 파일로 저장한다.
+    파이프라인 전체 결과를 터미널 출력 순서(step1/step2/step3)와 동일한 구조의 JSON으로 저장한다.
 
-    :param results: 저장할 결과 리스트
+    :param payload: step1/step2/step3 키를 포함한 전체 결과 dict
     :param output_dir: 출력 폴더 경로
     :param timestamp: 파일명에 사용할 타임스탬프 문자열
     :return: 저장된 파일 경로
@@ -100,7 +95,7 @@ def save_results(results: list, output_dir: Path, timestamp: str) -> Path:
     output_dir.mkdir(parents=True, exist_ok=True)
     output_path = output_dir / f"rag_output_{timestamp}.json"
     with output_path.open("w", encoding="utf-8") as f:
-        json.dump(results, f, ensure_ascii=False, indent=2)
+        json.dump(payload, f, ensure_ascii=False, indent=2)
     return output_path
 
 
@@ -123,46 +118,39 @@ def save_debug_trace(traces: list, output_dir: Path, timestamp: str) -> Path:
 
 # ─── 메인 실행 ──────────────────────────────────────────────────────────────────
 
-def _build_routed_claims_from_text(text: str) -> list:
+def _build_claims_from_text(text: str) -> tuple[list, dict]:
     """
-    단일 문장 입력을 claim 1개짜리 routed_claims 리스트로 변환한다.
+    단일 문장 입력을 claim 1개짜리 리스트로 변환한다.
+    run_router_pipeline으로 claim 추출을 수행한다.
 
-    DEBUG_SKIP_ROUTER=true이면 라우터를 건너뛰고 route=internal로 고정한다.
-    그렇지 않으면 run_router_pipeline으로 claim 추출과 라우팅을 모두 수행한다.
+    :return: (claims 리스트, step1 출력 dict)
     """
-    if DEBUG_SKIP_ROUTER:
-        # claim 추출은 실행하되 검색 경로 결정(라우팅)은 건너뜀
-        print("[Step 1] claim 추출 중... (라우팅은 DEBUG_SKIP_ROUTER로 건너뜀)")
-        claim_result, claim_trace = extract_claim_from_text(text)
-        print()
-        return [{
-            "claim_id": "c1",
-            "claim": claim_result.claim or text,
-            "normalized_claim": claim_result.normalized_claim or text,
-            "topic": claim_result.topic,
-            "keywords": claim_result.keywords,
-            "search_ready": claim_result.search_ready,
-            "route_decision": {"route": "internal", "reason": "DEBUG_SKIP_ROUTER"},
-            "_agent1_trace": [claim_trace],
-        }]
-
-    print("[Step 1] claim 추출 및 검색 경로 라우팅 중...")
+    print("[Step 1] claim 추출 중...")
     result = run_router_pipeline(text)
     print()
 
     claim_result = result.get("claim_result") or {}
-    route_decision = result.get("route_decision")
 
-    return [{
-        "claim_id": "c1",
-        "claim": claim_result.get("claim", text),
-        "normalized_claim": claim_result.get("normalized_claim", text),
+    step1_output = {
+        "claim": claim_result.get("claim") or "",
+        "normalized_claim": claim_result.get("normalized_claim") or "",
         "topic": claim_result.get("topic", ""),
-        "keywords": claim_result.get("keywords", []),
+        "keywords": claim_result.get("keywords") or [],
         "search_ready": claim_result.get("search_ready", True),
-        "route_decision": route_decision,
+    }
+
+    claims = [{
+        "claim_id": "c1",
+        "original_text": text,
+        "claim": claim_result.get("claim") or text,
+        "normalized_claim": claim_result.get("normalized_claim") or text,
+        "topic": claim_result.get("topic", ""),
+        "keywords": claim_result.get("keywords") or [],
+        "search_ready": claim_result.get("search_ready", True),
         "error": result.get("error"),
     }]
+
+    return claims, step1_output
 
 
 def main() -> None:
@@ -171,8 +159,8 @@ def main() -> None:
 
     처리 순서:
       1. 입력 준비 (인라인 텍스트 or JSON 파일)
-      2. 검색 경로 라우팅 (DEBUG_SKIP_ROUTER=true이면 건너뜀)
-      3. internal/both 판정된 claim마다 사내 문서 검색 + 하이라이트
+      2. claim 추출 (인라인 텍스트 모드 한정)
+      3. 사내 문서 검색 + 하이라이트
       4. fallback 발생 시 웹 에이전트 이관 안내 출력
       5. 결과를 JSON 파일로 저장
     """
@@ -180,163 +168,137 @@ def main() -> None:
 
     print("=" * 60)
     print("RAG Main Pipeline 시작")
-    print(f"입력 모드: {input_mode}")
-    print(f"디버그 모드: DEBUG_SKIP_ROUTER={DEBUG_SKIP_ROUTER} | VERBOSE={VERBOSE}")
+    print(f"입력 모드: {input_mode} | VERBOSE={VERBOSE}")
     print("=" * 60)
 
     # ── 1) 입력 준비 ────────────────────────────────────────────────────────────
+    step1_output: dict = {}
+
     if INPUT_TEXT.strip():
         # 인라인 텍스트 모드: 파일 없이 바로 실행
         print(f"입력 문장: {INPUT_TEXT.strip()}")
         print()
-        routed_claims = _build_routed_claims_from_text(INPUT_TEXT.strip())
+        claims, step1_output = _build_claims_from_text(INPUT_TEXT.strip())
+        step1_input_text = INPUT_TEXT.strip()
     else:
         # JSON 파일 모드: claim_extractor_output.json 로드
         print(f"입력 파일: {INPUT_PATH}")
         data = load_input(INPUT_PATH)
         claims = data["claims"]
         qw = data.get("input", {}).get("qw", "")
+        step1_input_text = qw
 
         if MAX_CLAIMS > 0:
             claims = claims[:MAX_CLAIMS]
 
         print(f"qw: {qw}")
         print(f"처리할 claim 수: {len(claims)}")
-        if DEBUG_SKIP_ROUTER:
-            print("[디버그] DEBUG_SKIP_ROUTER=true → 라우터를 건너뛰고 전체 claim을 rag_extractor로 직행합니다.")
         print()
 
-        if DEBUG_SKIP_ROUTER:
-            # 모든 claim을 route=internal로 고정하여 라우터 LLM 호출 없이 바로 RAG 단계로 진입
-            routed_claims = [
-                {**c, "route_decision": {"route": "internal", "reason": "DEBUG_SKIP_ROUTER"}}
-                for c in claims
-            ]
-        else:
-            print("[Step 1] 검색 경로 라우팅 중...")
-            routed_claims = run_router_pipeline_for_claims(claims)
-            print()
-
-    # ── 2) 라우팅 결과 요약 출력 ────────────────────────────────────────────────
-    print("[라우팅 결과 요약]")
-    print("-" * 40)
-    for rc in routed_claims:
-        rd = rc.get("route_decision")
-        if rd:
-            print(f"  {rc['claim_id']}: route={rd['route']} | {rd['reason'][:50]}...")
-        else:
-            reason = rc.get("skip_reason") or rc.get("error") or "unknown"
-            print(f"  {rc['claim_id']}: 라우팅 없음 ({reason})")
-    print()
-
-    # ── 4) 사내 문서 검색 + 하이라이트 생성 ─────────────────────────────────────
+    # ── 2) 사내 문서 검색 + 하이라이트 생성 ─────────────────────────────────────
     print("[Step 2] 사내 문서 검색 및 하이라이트 생성 중...")
     print("-" * 40)
 
-    final_results = []
+    step2_claims = []
     debug_traces = []  # 디버그용: claim별 OpenAI SDK response 원본 누적
-    for rc in routed_claims:
+    for rc in claims:
         claim_id = rc.get("claim_id", "?")
-        rd = rc.get("route_decision")
 
-        entry: dict = {
-            "claim_id": claim_id,
-            "claim": rc.get("claim", ""),
-            "normalized_claim": rc.get("normalized_claim", ""),
-            "topic": rc.get("topic", ""),
-            "route": rd["route"] if rd else None,
-        }
-
-        if not rd or rd["route"] not in ("internal", "both"):
-            # web only: 사내 문서 검색 불필요, 웹 에이전트로 처리
-            entry["status"] = "web_only"
-            entry["highlight"] = None
-            entry["web_agent_needed"] = True
-            print(f"  {claim_id}: [web] 웹 에이전트로 이관됩니다.")
-            final_results.append(entry)
-            continue
-
-        # internal 또는 both: 사내 문서 검색 실행
-        print(f"\n  {claim_id}: [internal] 사내 문서 검색 시작...")
-        qk = rc.get("claim", rc.get("normalized_claim", ""))
-
-        # 디버그 모드이고 사전 추출된 keywords가 있으면 Agent 1(ClaimExtractor)을 건너뜀
+        qk = rc.get("claim") or rc.get("normalized_claim") or rc.get("original_text", "")
         pre_claim = rc.get("normalized_claim") or rc.get("claim") or None
         pre_keywords = rc.get("keywords") or None
-        skip_agent1 = DEBUG_SKIP_ROUTER and bool(pre_claim) and bool(pre_keywords)
+        # 사전 추출된 claim/keywords가 있으면 rag_extractor 내부의 Agent 1을 건너뜀
+        skip_agent1 = bool(pre_claim) and bool(pre_keywords)
+
+        print(f"\n  {claim_id}: 사내 문서 검색 시작...")
+
+        claim_entry: dict = {"claim_id": claim_id}
 
         try:
-            result, agent_trace = run_rag_extractor(
+            result, agent_trace, agent_steps = run_rag_extractor(
                 qk=qk,
                 claim=pre_claim if skip_agent1 else None,
                 keywords=pre_keywords if skip_agent1 else None,
                 verbose=VERBOSE,
             )
-            entry["status"] = "success"
-            entry["claim"] = result["claim"]  # run_rag_extractor에서 실제 추출된 claim으로 갱신
-            entry["highlight"] = result["highlight"]
-            entry["highlight_reason"] = result["highlight_reason"]
-            entry["keyword_used"] = result["keyword_used"]
-            entry["folder_searched"] = result["folder_searched"]
-            entry["source_file"] = result["source_file"]
-            entry["source_page"] = result["source_page"]
-            entry["raw_source"] = result["raw_source"]
-            entry["web_agent_needed"] = rd["route"] == "both"
 
-            # agent1 trace가 비어 있을 때(skip_agent1=True였던 경우)만 사전 추출 trace를 주입
+            # agent1 trace가 비어 있을 때(skip_agent1=True) 사전 추출 trace 주입
             if not agent_trace.get("agent1_claim_extractor") and rc.get("_agent1_trace"):
                 agent_trace["agent1_claim_extractor"] = rc["_agent1_trace"]
 
-            # 디버그 trace 누적: claim_id와 에이전트별 response 원본을 함께 저장
-            debug_traces.append({"claim_id": claim_id, "agent_trace": agent_trace})
+            claim_entry["status"] = "success"
+            claim_entry["agents"] = {
+                "claim_extractor": agent_steps["claim_extractor"],
+                "folder_router": agent_steps["folder_router"],
+                "search_highlight": agent_steps["search_highlight"],
+            }
+            claim_entry["highlight"] = result["highlight"]
+            claim_entry["source_file"] = result["source_file"]
+            claim_entry["source_page"] = result["source_page"]
 
+            debug_traces.append({"claim_id": claim_id, "agent_trace": agent_trace})
             print(f"  {claim_id}: [완료] {result['highlight'][:60]}...")
-            if rd["route"] == "both":
-                # both인 경우 사내 문서 검색 후 웹 검색도 추가로 필요
-                print(f"  {claim_id}: [both] 웹 에이전트 추가 검색도 필요합니다.")
 
         except FallbackRequired as e:
-            # 사내 문서에서 찾지 못한 경우 웹 에이전트로 이관
-            entry["status"] = "fallback"
-            entry["highlight"] = None
-            entry["fallback_reason"] = str(e)
-            entry["web_agent_needed"] = True
+            claim_entry["status"] = "fallback"
+            claim_entry["fallback_reason"] = str(e)
+            claim_entry["web_agent_needed"] = True
             debug_traces.append({"claim_id": claim_id, "agent_trace": None, "fallback_reason": str(e)})
             print(f"  {claim_id}: [fallback] 웹 에이전트로 이관 → {e}")
 
         except Exception as e:
-            # 예기치 못한 오류
-            entry["status"] = "error"
-            entry["highlight"] = None
-            entry["error"] = str(e)
-            entry["web_agent_needed"] = True
+            claim_entry["status"] = "error"
+            claim_entry["error"] = str(e)
+            claim_entry["web_agent_needed"] = True
             debug_traces.append({"claim_id": claim_id, "agent_trace": None, "error": str(e)})
             print(f"  {claim_id}: [오류] {e}")
 
-        final_results.append(entry)
+        step2_claims.append(claim_entry)
 
-    # ── 5) 결과 저장 ─────────────────────────────────────────────────────────────
+    # ── 3) 결과 저장 ─────────────────────────────────────────────────────────────
+    success_count = sum(1 for r in step2_claims if r.get("status") == "success")
+    fallback_count = sum(1 for r in step2_claims if r.get("status") == "fallback")
+    error_count = sum(1 for r in step2_claims if r.get("status") == "error")
+
+    timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+
+    output_payload = {
+        "pipeline": "RAG Main Pipeline",
+        "input_mode": input_mode,
+        "step1": {
+            "label": "claim 추출",
+            "agent": "claim_router_validation / ClaimExtractionAgent",
+            "role": "자연어 입력에서 검색용 claim, normalized_claim, 키워드, 주제어 추출",
+            "input": step1_input_text,
+            "output": step1_output,
+        },
+        "step2": {
+            "label": "사내 문서 검색 및 하이라이트 생성",
+            "claims": step2_claims,
+        },
+        "step3": {
+            "label": "최종 요약",
+            "total": len(step2_claims),
+            "success": success_count,
+            "fallback": fallback_count,
+            "error": error_count,
+        },
+    }
+
     print()
     print("[Step 3] 결과 저장 중...")
-    timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-    output_path = save_results(final_results, OUTPUT_DIR, timestamp)
+    output_path = save_results(output_payload, OUTPUT_DIR, timestamp)
     debug_path = save_debug_trace(debug_traces, OUTPUT_DIR, timestamp)
     print(f"결과 저장:  {output_path}")
     print(f"디버그 저장: {debug_path}")
 
-    # ── 6) 최종 요약 출력 ────────────────────────────────────────────────────────
-    success_count = sum(1 for r in final_results if r.get("status") == "success")
-    fallback_count = sum(1 for r in final_results if r.get("status") == "fallback")
-    web_only_count = sum(1 for r in final_results if r.get("status") == "web_only")
-    error_count = sum(1 for r in final_results if r.get("status") == "error")
-
+    # ── 4) 최종 요약 출력 ────────────────────────────────────────────────────────
     print()
     print("=" * 60)
     print("최종 요약")
-    print(f"  전체 claim: {len(final_results)}개")
+    print(f"  전체 claim: {len(step2_claims)}개")
     print(f"  성공 (highlight 생성): {success_count}개")
     print(f"  fallback (웹 이관):    {fallback_count}개")
-    print(f"  web only:              {web_only_count}개")
     print(f"  오류:                  {error_count}개")
     print("=" * 60)
 

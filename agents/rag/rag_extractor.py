@@ -132,10 +132,13 @@ def _tool_search_vector_db(folder: str, keyword: str, min_len: int = MIN_CHUNK_L
             # 너무 짧은 청크는 의미 있는 근거가 되기 어려우므로 제외
             skipped += 1
             continue
+        # text-embedding-3-small은 정규화 벡터를 출력하므로 L2 거리 → 코사인 유사도 % 변환
+        # cosine_similarity = 1 - (l2_distance² / 2), 범위: 0~100%
+        similarity_pct = round((1 - (float(score) ** 2) / 2) * 100, 1)
         valid.append({
             "content": content[:800],  # 토큰 절약을 위해 800자로 자름
             "content_len": len(content),
-            "score": round(float(score), 4),
+            "similarity_pct": similarity_pct,
             "file_name": doc.metadata.get("file_name", ""),
             "page_label": doc.metadata.get("page_label", ""),
             "folder": folder,
@@ -232,7 +235,7 @@ def _run_agent(
     user_msg: str,
     max_turns: int = MAX_AGENT_TURNS,
     verbose: bool = True,
-) -> Tuple[str, List[dict]]:
+) -> Tuple[str, List[dict], List[dict]]:
     """
     OpenAI Responses API를 사용해 툴 호출 루프를 실행한다.
     previous_response_id로 멀티턴 대화 문맥을 유지한다.
@@ -242,13 +245,16 @@ def _run_agent(
     :param user_msg: 최초 사용자 메시지
     :param max_turns: 최대 도구 호출 횟수 (초과 시 FallbackRequired 발생)
     :param verbose: True이면 각 턴의 툴 호출 정보를 출력
-    :return: (최종 텍스트 응답, 각 턴의 직렬화된 response 목록)
+    :return: (최종 텍스트 응답, 각 턴의 직렬화된 response 목록, 구조화된 턴 로그)
+             턴 로그 형식: [{"turn": int, "status": str, "tool_calls": [...]}]
     :raises FallbackRequired: max_turns 초과 시
     """
     previous_response_id: Optional[str] = None
     current_input = [{"role": "user", "content": user_msg}]
     # 각 턴에서 받은 response를 직렬화하여 누적 (디버그용)
     response_trace: List[dict] = []
+    # 각 턴의 툴 호출/결과를 구조화하여 누적 (JSON 출력용)
+    turn_log: List[dict] = []
 
     for turn in range(1, max_turns + 1):
         kwargs: Dict[str, Any] = {
@@ -269,6 +275,8 @@ def _run_agent(
         if verbose:
             print(f"  [turn {turn}] status={response.status}")
 
+        turn_entry: dict = {"turn": turn, "status": response.status, "tool_calls": []}
+
         # 툴 호출 처리: 에이전트가 tool_call을 요청하면 결과를 다음 턴 input으로 전달
         tool_outputs = []
         for item in response.output:
@@ -280,18 +288,33 @@ def _run_agent(
                     else:
                         print(f"    → {item.name}()")
                 result = _dispatch_tool(item.name, args)
-                if verbose and item.name == "search_vector_db":
+
+                # 툴별 결과 요약을 turn_log에 기록
+                tool_call_entry: dict = {"name": item.name, "args": args}
+                if item.name == "search_vector_db":
                     r = json.loads(result)
-                    print(f"      valid={r['valid_count']}, skipped={r['skipped_count']}")
+                    top_pcts = [c["similarity_pct"] for c in r["results"][:3]]
+                    if verbose:
+                        pct_str = ", ".join(f"{p}%" for p in top_pcts)
+                        print(f"      valid={r['valid_count']}, skipped={r['skipped_count']}, top유사도=[{pct_str}]")
+                    tool_call_entry["result_summary"] = {
+                        "valid_count": r["valid_count"],
+                        "skipped_count": r["skipped_count"],
+                        "top_similarity_pct": top_pcts,
+                    }
+                turn_entry["tool_calls"].append(tool_call_entry)
+
                 tool_outputs.append({
                     "type": "function_call_output",
                     "call_id": item.call_id,
                     "output": result,
                 })
 
+        turn_log.append(turn_entry)
+
         # 툴 호출이 없으면 에이전트가 최종 응답을 완료한 것
         if not tool_outputs:
-            return response.output_text, response_trace
+            return response.output_text, response_trace, turn_log
 
         current_input = tool_outputs
 
@@ -377,7 +400,7 @@ def run_folder_router_agent(
     claim: str,
     keywords: List[str],
     verbose: bool = True,
-) -> Tuple[Dict[str, Any], List[dict]]:
+) -> Tuple[Dict[str, Any], List[dict], List[dict]]:
     """
     FolderRouterAgent: claim과 키워드를 기반으로 검색할 폴더 목록을 결정한다.
     read_directory_map 툴을 사용하여 실제 폴더 구조를 확인한 뒤 판단한다.
@@ -385,7 +408,7 @@ def run_folder_router_agent(
     :param claim: 추출된 핵심 claim 문장
     :param keywords: 검색 키워드 목록
     :param verbose: True이면 실행 정보 출력
-    :return: ({"folders": List[str], "reason": str}, [직렬화된 response 목록])
+    :return: ({"folders": List[str], "reason": str}, [직렬화된 response 목록], [턴 로그])
     :raises FallbackRequired: max_turns 초과 시
     """
     if verbose:
@@ -395,7 +418,7 @@ def run_folder_router_agent(
         f"claim: {claim}\n"
         f"keywords: {', '.join(keywords)}"
     )
-    text, response_trace = _run_agent(
+    text, response_trace, turn_log = _run_agent(
         system=_FOLDER_ROUTER_SYSTEM,
         tools=FOLDER_ROUTER_TOOLS,
         user_msg=user_msg,
@@ -415,7 +438,7 @@ def run_folder_router_agent(
         result["folders"] = ALL_FOLDERS
     if verbose:
         print(f"  folders: {result.get('folders', [])}")
-    return result, response_trace
+    return result, response_trace, turn_log
 
 
 # ─── Agent 3: SearchHighlightAgent ─────────────────────────────────────────────
@@ -450,7 +473,7 @@ def run_search_highlight_agent(
     keywords: List[str],
     folders: List[str],
     verbose: bool = True,
-) -> Tuple[Dict[str, Any], List[dict]]:
+) -> Tuple[Dict[str, Any], List[dict], List[dict]]:
     """
     SearchHighlightAgent: 지정 폴더에서 claim에 대한 근거 청크를 찾아 하이라이트를 생성한다.
     처음에는 주어진 키워드와 폴더를 사용하고, 결과가 부족하면 직접 키워드와 폴더를 바꿔 재시도한다.
@@ -459,7 +482,7 @@ def run_search_highlight_agent(
     :param keywords: 검색 키워드 목록
     :param folders: FolderRouterAgent가 선택한 폴더 목록 (우선순위 순)
     :param verbose: True이면 실행 정보 출력
-    :return: ({highlight 결과}, [직렬화된 response 목록])
+    :return: ({highlight 결과}, [직렬화된 response 목록], [턴 로그])
     :raises FallbackRequired: max_turns 초과 또는 유효한 청크 없음
     """
     if verbose:
@@ -470,7 +493,7 @@ def run_search_highlight_agent(
         f"keywords: {', '.join(keywords)}\n"
         f"folders: {', '.join(folders)}"
     )
-    text, response_trace = _run_agent(
+    text, response_trace, turn_log = _run_agent(
         system=_SEARCH_HIGHLIGHT_SYSTEM,
         tools=SEARCH_HIGHLIGHT_TOOLS,
         user_msg=user_msg,
@@ -490,7 +513,7 @@ def run_search_highlight_agent(
     if not result.get("highlight"):
         raise FallbackRequired("SearchHighlightAgent가 유효한 하이라이트를 생성하지 못했습니다.")
 
-    return result, response_trace
+    return result, response_trace, turn_log
 
 
 # ─── 오케스트레이터: run_rag_extractor ─────────────────────────────────────────
@@ -500,7 +523,7 @@ def run_rag_extractor(
     claim: Optional[str] = None,
     keywords: Optional[List[str]] = None,
     verbose: bool = True,
-) -> Tuple[RagExtractorResult, dict]:
+) -> Tuple[RagExtractorResult, dict, dict]:
     """
     qk(원문)를 입력받아 사내 벡터DB에서 근거를 찾고 하이라이트를 생성하는 전체 파이프라인을 실행한다.
 
@@ -511,11 +534,16 @@ def run_rag_extractor(
     :param claim: 이미 추출된 claim 문장 (None이면 Agent 1이 qk에서 직접 추출)
     :param keywords: 이미 추출된 검색 키워드 목록 (None 또는 빈 리스트이면 Agent 1이 추출)
     :param verbose: True이면 각 에이전트의 실행 정보 출력
-    :return: (RagExtractorResult, agent_trace)
+    :return: (RagExtractorResult, agent_trace, agent_steps)
              agent_trace = {
                "agent1_claim_extractor": [response, ...],  # 건너뛴 경우 빈 리스트
                "agent2_folder_router":   [response, ...],
                "agent3_search_highlight":[response, ...],
+             }
+             agent_steps = {
+               "claim_extractor": {"skipped": bool, "claim": str, "keywords": list},
+               "folder_router":   {"folders_selected": list, "reason": str},
+               "search_highlight": {highlight 결과 dict},
              }
     :raises FallbackRequired: 적합한 청크를 찾지 못한 경우
     """
@@ -527,21 +555,43 @@ def run_rag_extractor(
             print(f"  claim: {claim[:60]}...")
             print(f"  keywords: {keywords}")
         trace_agent1: List[dict] = []
+        step_claim_extractor = {
+            "agent": "ClaimExtractorAgent",
+            "role": "qk(원문)에서 검색용 claim과 키워드 추출",
+            "skipped": True,
+            "skip_reason": "상위 단계(claim_router_validation)에서 사전 추출된 claim/keywords 사용",
+            "claim": claim,
+            "keywords": keywords,
+        }
     else:
         claim_data, trace_agent1 = run_claim_extractor_agent(qk, verbose=verbose)
         claim = claim_data["claim"]
         keywords = claim_data.get("keywords", [])
+        step_claim_extractor = {
+            "agent": "ClaimExtractorAgent",
+            "role": "qk(원문)에서 검색용 claim과 키워드 추출",
+            "skipped": False,
+            "claim": claim,
+            "keywords": keywords,
+        }
 
     # Step 2: FolderRouterAgent - 검색할 폴더 결정
-    folder_data, trace_agent2 = run_folder_router_agent(claim, keywords, verbose=verbose)
+    folder_data, trace_agent2, turns_folder_router = run_folder_router_agent(claim, keywords, verbose=verbose)
     folders = folder_data.get("folders", ALL_FOLDERS)
+    step_folder_router = {
+        "agent": "FolderRouterAgent",
+        "role": "claim 주제에 맞는 벡터DB 폴더를 신뢰도 계층 기준으로 선택",
+        "folders_selected": folders,
+        "reason": folder_data.get("reason", ""),
+        "turns": turns_folder_router,
+    }
 
     # Step 3: SearchHighlightAgent - 벡터DB 검색 + 하이라이트 생성
     # 선정된 폴더에서 먼저 검색하고, 부족하면 미사용 폴더도 자동으로 탐색
     unused_folders = [f for f in ALL_FOLDERS if f not in folders]
     all_folders_ordered = folders + unused_folders
 
-    highlight_data, trace_agent3 = run_search_highlight_agent(
+    highlight_data, trace_agent3, turns_search_highlight = run_search_highlight_agent(
         claim=claim,
         keywords=keywords,
         folders=all_folders_ordered,
@@ -569,4 +619,22 @@ def run_rag_extractor(
         "agent3_search_highlight": trace_agent3,
     }
 
-    return result, agent_trace
+    # 각 에이전트의 구조화된 입출력 (JSON 출력용)
+    agent_steps = {
+        "claim_extractor": step_claim_extractor,
+        "folder_router": step_folder_router,
+        "search_highlight": {
+            "agent": "SearchHighlightAgent",
+            "role": "벡터DB에서 claim 근거 청크를 검색하고 하이라이트 생성",
+            "turns": turns_search_highlight,
+            "keyword_used": highlight_data.get("keyword_used", ""),
+            "folder_searched": highlight_data.get("folder_searched", ""),
+            "highlight": highlight_data.get("highlight", ""),
+            "highlight_reason": highlight_data.get("highlight_reason", ""),
+            "source_file": highlight_data.get("source_file", ""),
+            "source_page": highlight_data.get("source_page", ""),
+            "raw_source": highlight_data.get("raw_source", ""),
+        },
+    }
+
+    return result, agent_trace, agent_steps
