@@ -16,3 +16,7 @@ pydantic>=2.7
 langgraph>=0.2
 langchain-core>=0.3
 python-dotenv>=1.0
+
+# --- Research cluster (A) — web fact verification ---
+openai>=1.40
+tavily-python>=0.5
