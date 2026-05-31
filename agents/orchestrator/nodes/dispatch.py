@@ -15,14 +15,36 @@ from __future__ import annotations
 
 import asyncio
 
-from common.schema import PlanState, ValidationReport
-from agents.research.stub import run_research
+from common.schema import PlanState, ValidationReport, VerificationRequest
+from agents.research import run_research
 from agents.rag.stub import run_rag_check
 from agents.critic.stub import run_critic
 
 
 # 실제 워커를 가진 라우트. clarify/none은 디스패치 대상이 아님.
 _WORKER_ROUTES = {"research", "rag", "critic"}
+
+# 리서치 검색 recency 힌트 기본값(일). 회사 조직처럼 빠르게 변하는 항목은 추후 세분화.
+_RESEARCH_FRESHNESS_DAYS = 180
+
+
+def _slot_context(slots: dict) -> dict:
+    """채워진 슬롯만 발췌 — 리서치 분해기가 검증 방식을 정하는 단서."""
+    return {name: s.get("value") for name, s in slots.items() if s.get("value")}
+
+
+def _verification_request(
+    subject: str, label: str, slots: dict, state: PlanState
+) -> VerificationRequest:
+    """세그먼트 1건 → 리서치 클러스터 입력 (research_spec VerificationRequest)."""
+    return {
+        "claim": subject,
+        "utterance_label": label,
+        "slot_context": _slot_context(slots),
+        "freshness_max_days": _RESEARCH_FRESHNESS_DAYS,
+        "session_id": state.get("session_id", ""),
+        "turn_id": state.get("turn", 0),
+    }
 
 
 async def parallel_dispatch_workers_node(state: PlanState) -> dict:
@@ -32,7 +54,7 @@ async def parallel_dispatch_workers_node(state: PlanState) -> dict:
     # 디스패치 대상 세그먼트만 추림 (subject 비어있으면 제외).
     # '워커 라우트 유무'로 판단 — opinion(routes=rag·critic)도 기획서 매트릭스대로
     # 디스패치되도록. (명확화-only 턴은 graph의 _clarify_branch가 미리 우회)
-    targets: list[tuple[str, list[str]]] = []
+    targets: list[tuple[str, list[str], str]] = []
     for seg in segments:
         routes = seg.get("routes") or []
         if not (_WORKER_ROUTES & set(routes)):
@@ -40,7 +62,9 @@ async def parallel_dispatch_workers_node(state: PlanState) -> dict:
         subject = (seg.get("canonical_text") or seg.get("text", "")).strip()
         if not subject:
             continue
-        targets.append((subject, list(routes)))
+        labels = seg.get("utterance_types") or []
+        label = labels[0] if labels else "claim"
+        targets.append((subject, list(routes), label))
 
     if not targets:
         return {}
@@ -48,10 +72,12 @@ async def parallel_dispatch_workers_node(state: PlanState) -> dict:
     # --- 1단계: 리서치·RAG 병렬 (외부 사실 + 회사 문서) ---
     fact_specs: list[tuple[int, str]] = []  # (target_idx, route)
     fact_coros = []
-    for idx, (subject, routes) in enumerate(targets):
+    for idx, (subject, routes, label) in enumerate(targets):
         if "research" in routes:
             fact_specs.append((idx, "research"))
-            fact_coros.append(run_research(subject))
+            fact_coros.append(
+                run_research(_verification_request(subject, label, slots, state))
+            )
         if "rag" in routes:
             fact_specs.append((idx, "rag"))
             fact_coros.append(run_rag_check(subject))
@@ -71,7 +97,7 @@ async def parallel_dispatch_workers_node(state: PlanState) -> dict:
 
     # --- 2단계: 비평 (1단계 산출물을 입력으로) ---
     critic_coros = []
-    for idx, (subject, routes) in enumerate(targets):
+    for idx, (subject, routes, _label) in enumerate(targets):
         if "critic" in routes:
             critic_coros.append(
                 run_critic(
