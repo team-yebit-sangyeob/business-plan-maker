@@ -87,6 +87,16 @@ class ValidationReport(TypedDict, total=False):
     cluster: Literal["research", "rag", "critic"]                      # 어느 워커가 냈는지
 
 
+class VerificationRequest(TypedDict, total=False):
+    # 리서치 클러스터 입력. dispatch가 세그먼트당 1건 구성해 run_research에 넘긴다.
+    claim: str                       # 검증 대상 (사실 주장 또는 가설의 전제)
+    utterance_label: UtteranceType   # 원본 발화 라벨 (참고용)
+    slot_context: dict               # 관련 슬롯 발췌 — 분해기가 검증 방식을 정하는 단서
+    freshness_max_days: int          # 검색 recency 힌트 (작을수록 최신 우선; 캐시 TTL 아님)
+    session_id: str
+    turn_id: int
+
+
 class Message(TypedDict):
     # 대화 한 줄. 예: {"role": "user", "content": "타겟은 네이버", "turn": 2}
     role: Literal["user", "assistant"]
