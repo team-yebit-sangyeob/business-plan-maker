@@ -8,6 +8,7 @@
 """
 from __future__ import annotations
 
+import json
 import re
 from typing import Callable
 
@@ -168,26 +169,92 @@ _SLOT_Q = {
 }
 
 
+def _rag(system: str, user: str) -> dict:
+    """RAG 시뮬레이션 데모 응답 — 사내 자료에서 나왔을 법한 근거를 결정론으로 생성."""
+    subject = _section(user, "발화 주제") or user.strip()
+    head = subject[:36]
+    return {
+        "findings": [
+            f"사내 자료 기준 '{head}' 관련 전담 조직·예산 배정 근거는 제한적입니다(추정).",
+            "2026 로드맵은 기존 B2C 라이브 운영 강화에 무게 — 신규 방향과 부분적으로 어긋남.",
+            "유사 신사업 선례상 초기 6개월 인력 4~5명 규모가 일반적.",
+        ],
+        "sources": ["company_roadmap_2026.md", "org_chart.pdf", "newbiz_precedent.xlsx"],
+        "agreement": "partial",
+    }
+
+
+def _critic(system: str, user: str) -> dict:
+    """비평 시뮬레이션 데모 응답 — 추론 비약 + (근거 있으면) 정합성 충돌을 결정론으로."""
+    utterance = _section(user, "발화") or user.strip()
+    head = utterance[:34]
+    has_research = "[리서치 근거]" in user
+    has_rag = "[회사(RAG) 근거]" in user
+    findings = [
+        f"전제에서 결론('{head}…')으로의 비약 가능성 — 핵심 변수 1개 이상이 명시되지 않았습니다.",
+    ]
+    if has_research:
+        findings.append("리서치 근거와 사용자 전제 사이에 부분 충돌 — 수용도·범위 조건 재확인 권장.")
+    if has_rag:
+        findings.append("회사 로드맵·조직 현황과 방향이 일부 어긋남 — 분기/보류 옵션 검토 권장.")
+    return {
+        "findings": findings,
+        "sources": [],
+        "agreement": "partial" if (has_research or has_rag) else "unknown",
+    }
+
+
+def _first(items, default: str = "") -> str:
+    for it in items or []:
+        if str(it).strip():
+            return str(it).strip()
+    return default
+
+
+def _render_intent(intent: dict) -> str:
+    """단일 intent → 한 문장(데모용 결정론 렌더)."""
+    t = intent.get("type")
+    if t == "acknowledge":
+        slot = intent.get("slot") or "그 항목"
+        new = intent.get("new")
+        return f"{slot}은(는) '{new}'로 반영했어요." if new else f"{slot}은(는) 비워뒀어요."
+    if t == "redirect":
+        return "그건 지금 짜는 사업 계획과는 좀 떨어진 얘기라 그쪽은 넘어갈게요."
+    if t == "report_findings":
+        fact = _first(intent.get("research")) or _first(intent.get("rag"))
+        crit = _first(intent.get("critic"))
+        parts = []
+        if fact:
+            parts.append(f"찾아보니 {fact}")
+        if crit:
+            parts.append(f"다만 {crit}")
+        return " ".join(parts) or "관련 근거를 살펴봤어요."
+    if t == "answer_question":
+        ans = _first(intent.get("research")) or _first(intent.get("rag"))
+        return f"확인해보니 {ans}" if ans else "관련해서 찾아보고 있어요."
+    if t == "clarify":
+        text = intent.get("text") or "그 부분"
+        return f"먼저 '{text}' 이 부분만 조금 더 풀어줄래요?"
+    if t == "reject_output":
+        missing = ", ".join(intent.get("missing_required") or []) or "필수 항목"
+        return f"지금 뽑기엔 {missing} 쪽이 비어 있어요. 그것만 채우면 바로 출력 가능해요."
+    if t == "deliver_plan":
+        if intent.get("output_type") == "type2":
+            return "필수는 다 찼으니 지금도 뽑을 수 있어요(빈 항목은 [미정]으로 들어가요)."
+        return "필요한 항목이 다 찼어요. '계획서 생성'으로 뽑아볼까요?"
+    if t == "ask_slot":
+        return _SLOT_Q.get(intent.get("slot", ""), "다음으로 어떤 항목을 채워볼까요?")
+    return ""
+
+
 def _conversation(system: str, user: str) -> dict:
-    mode_m = re.search(r"\[모드\]\s*(\S+)", user)
-    slot_m = re.search(r"\[채울 슬롯\]\s*(\S+)", user)
-    mode = mode_m.group(1) if mode_m else ""
-    slot = slot_m.group(1) if slot_m else ""
-
-    if mode == "type0_reject":
-        missing = _section(user, "필수 부족") or "필수 항목"
-        # "[필수 부족] a, b" 한 줄짜리라 section이 비면 정규식으로 보강
-        if not missing or missing == "없음":
-            mm = re.search(r"\[필수 부족\]\s*(.+)", user)
-            missing = mm.group(1).strip() if mm else "필수 항목"
-        return {
-            "question": (
-                f"지금은 {missing} 쪽이 비어 있어서 계획서로 뽑기엔 일러요. "
-                "이것만 채우면 바로 출력할 수 있어요."
-            )
-        }
-
-    return {"question": _SLOT_Q.get(slot, "다음으로 어떤 항목을 채워볼까요?")}
+    try:
+        data = json.loads(user)
+        intents = data.get("intents") or []
+    except (json.JSONDecodeError, AttributeError):
+        intents = []
+    parts = [p for p in (_render_intent(i) for i in intents) if p]
+    return {"message": "\n".join(parts) or "다음으로 어떤 항목을 채워볼까요?"}
 
 
 # key = system prompt 첫 줄
@@ -198,4 +265,6 @@ DEFAULT_MOCK_HANDLERS: dict[str, Callable[[str, str], dict]] = {
     "오케스트레이터 슬롯 채움": _slot_fill,
     "오케스트레이터 출력 의도 판정": _intent,
     "대화 에이전트": _conversation,
+    "RAG 시뮬레이션": _rag,
+    "비평 시뮬레이션": _critic,
 }
