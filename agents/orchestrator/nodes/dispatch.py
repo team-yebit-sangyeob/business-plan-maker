@@ -115,4 +115,5 @@ async def parallel_dispatch_workers_node(state: PlanState) -> dict:
 
     existing = list(state.get("validation_reports") or [])
     existing.extend(reports)
-    return {"validation_reports": existing}
+    # turn_validation_reports = 이번 턴 것만(대화 보고·SSE 활동용). validation_reports는 누적.
+    return {"validation_reports": existing, "turn_validation_reports": reports}

@@ -102,6 +102,7 @@ async def run_turn(state: PlanState, user_input: str) -> PlanState:
         "turn_segments": [],
         "output_request": None,
         "pending_clarifications": [],
+        "turn_validation_reports": [],
     }
     result: PlanState = await graph.ainvoke(next_state)
 
