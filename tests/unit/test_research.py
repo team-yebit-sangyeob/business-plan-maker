@@ -158,11 +158,13 @@ def test_reporter_invalid_agreement_defaults_unknown():
 # --- run_research (stub paths) ---------------------------------------------
 
 def test_run_research_stub_in_mock_mode(monkeypatch):
+    # mock 모드 stub은 (키 없이) 프론트 데모용 근거를 만든다 — 빈 응답이 아니라 유효 리포트.
     monkeypatch.setenv("BPM_LLM_MODE", "mock")
     r = asyncio.run(run_research({"claim": "한국 게임 시장이 포화 상태다"}))
     assert r["cluster"] == "research"
-    assert r["agreement"] == "unknown"
     assert r["subject"] == "한국 게임 시장이 포화 상태다"
+    assert r["findings"]  # 데모 근거 비어있지 않음
+    assert r["agreement"] in {"confirms", "contradicts", "partial", "unknown"}
 
 
 def test_run_research_accepts_legacy_string(monkeypatch):
