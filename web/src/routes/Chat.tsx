@@ -55,7 +55,7 @@ export default function Chat() {
         id: makeId(),
         role: "agent",
         text: "",
-        validations: [],
+        activities: [],
       };
       currentAgentId.current = agentMsg.id;
       setMessages((m) => [...m, userMsg, agentMsg]);
@@ -68,19 +68,36 @@ export default function Chat() {
             if (e.type === "token") {
               return { ...m, text: m.text + e.text };
             }
-            if (e.type === "validation_report") {
+            if (e.type === "agent_start") {
+              // 새 활동 줄을 '실행 중'으로 추가
               return {
                 ...m,
-                validations: [
-                  ...(m.validations ?? []),
-                  {
-                    subject: e.subject,
-                    findings: e.findings,
-                    sources: e.sources,
-                    agreement: e.agreement,
-                  },
+                activities: [
+                  ...(m.activities ?? []),
+                  { cluster: e.cluster, subject: e.subject, status: "running" },
                 ],
               };
+            }
+            if (e.type === "validation_report") {
+              // 같은 (cluster, subject)의 실행중 줄을 결과로 해소. 없으면 새로 추가.
+              const acts = [...(m.activities ?? [])];
+              const idx = acts.findIndex(
+                (a) =>
+                  a.status === "running" &&
+                  a.cluster === e.cluster &&
+                  a.subject === e.subject,
+              );
+              const done = {
+                cluster: e.cluster,
+                subject: e.subject,
+                status: "done" as const,
+                findings: e.findings,
+                sources: e.sources,
+                agreement: e.agreement,
+              };
+              if (idx >= 0) acts[idx] = done;
+              else acts.push(done);
+              return { ...m, activities: acts };
             }
             return m;
           }),
