@@ -1,0 +1,274 @@
+# 오케스트레이터 로직 총정리 (구현 명세)
+
+> 기획서(`agent_plan_v7_5.html`, `orchestrator_spec.html`) v0.7.5 를 코드로 옮긴 결과.
+> **기획서를 먼저 읽고 이 문서를 읽으면** 오케스트레이터가 실제로 어떻게 동작하는지
+> 노드 단위로 파악할 수 있다. 코드 위치는 모두 `agents/orchestrator/` 기준.
+
+---
+
+## 0. 한 문장 요약
+
+매 사용자 메시지마다 **단일 진입점**으로 들어와, LangGraph 상태머신이
+`segment → classify → correction → (dispatch → extract_fills) → gate → conversation → integrator`
+순서로 흐르며 **분류·세그멘테이션·라우팅·슬롯 추적·출력 게이트**를 수행한다.
+판단(무엇을 할지)만 오케스트레이터가 하고, 표현(자연어)·실행(검색·추론)은 워커가 맡는다.
+
+---
+
+## 1. 핵심 데이터 모델 (`common/schema/state.py`)
+
+### 슬롯 10개 — 질문(조사) 순서대로
+
+`ALL_SLOTS` 튜플 순서가 곧 **기본 질문 순서**(사업계획 자연 전개): 문제→고객→솔루션→시장→차별점→수익모델→목표→자원→일정→리스크.
+
+| # | 슬롯 | 구분 | 의미 |
+|---|---|---|---|
+| 1 | `problem` | **필수** | 문제 정의 (P) |
+| 2 | `target` | **필수** | 타겟 고객 (T) |
+| 3 | `solution` | 선택 | 솔루션 형태 |
+| 4 | `market` | 선택 | 시장 근거 (리서치가 채움) |
+| 5 | `advantage` | 선택 | 차별점·경쟁우위 — solution+market 뒤라야 나옴 |
+| 6 | `revenue` | 선택 | 수익 모델 |
+| 7 | `goal` | **필수** | 목표 수치 (G) — 솔루션·수익모델 뒤라야 현실적 숫자 |
+| 8 | `resources` | 선택 | 인력·예산 |
+| 9 | `milestones` | 선택 | 일정 단계 |
+| 10 | `risks` | 선택 | 리스크 |
+
+```python
+# 질문 순서 = 자연 전개 순서 (이 튜플 순서대로 첫 빈칸을 묻는다)
+ALL_SLOTS = ("problem", "target", "solution", "market", "advantage",
+             "revenue", "goal", "resources", "milestones", "risks")
+# 출력 게이트 필수 — 순서가 아닌 멤버십(P·T·G). goal은 질문은 7번째지만 출력 전 충족 강제.
+REQUIRED_SLOTS = ("problem", "target", "goal")
+OPTIONAL_SLOTS = tuple(s for s in ALL_SLOTS if s not in REQUIRED_SLOTS)
+```
+> **필수 ≠ 먼저 질문.** `goal`은 필수(게이트 조건)지만 질문은 7번째 — 솔루션·수익모델을 모르면 측정 가능한 목표가 안 나오므로 일부러 늦췄다. "필수냐"(게이트 멤버십)와 "몇 번째로 묻느냐"(질문 순서)를 분리.
+> `advantage`(차별점·경쟁우위)는 기획서 9슬롯 외에 도메인 보강으로 추가한 슬롯 — "왜 우리인가".
+
+각 `Slot` = `{value, source_label, status}`.
+- `source_label` ∈ `SourceLabel` (`common/schema/labels.py`): `user / research / inference / candidate / empty`
+  → **출처 라벨은 기획서 3.4 그대로 유지** (에이전트 이름은 critic으로 바뀌었지만 라벨 enum은 불변).
+- `status` ∈ `empty / needs_clarification / filled`.
+
+### 발화 유형 6종 (`UtteranceType`)
+
+`clarification_needed · claim · opinion · correction · question · meta`
+> `claim`은 사실·가설·결정·제약을 한 유형으로 묶는다 — 라우팅이 동일(research+rag+critic)하기 때문. 주장을 어떻게 분해·검증할지는 **오케가 아니라 리서치 쿼리 분해기**가 정한다.
+> 세그먼트마다 `in_scope`(계획 관련 여부)도 함께 매겨, false면 워커를 막고 부드럽게 리다이렉트.
+
+### 라우트 (`Route`)
+
+`research · rag · critic · clarify · none`
+> v0.7.5에서 `inference` → **`critic`** 으로 변경. 비평(Critic)은 추론 점검 + 정합성 판단을 함께 맡는다.
+
+### Segment / ValidationReport / Correction
+
+- `Segment`: `{text, canonical_text, utterance_types[], in_scope, target_slot, routes[]}`
+  - 처리 순서·그래프 분기는 **별도 priority 필드 없이** `routes`/`utterance_types`에서 직접 파생한다 — 워커 호출·디스패치 분기는 `routes`(워커 라우트 유무), 정정 처리는 `utterance_types`(`"correction"` 포함 여부).
+  - `in_scope`: 사업 계획과 관련 있는 발화인가. False면 classify가 `routes=["none"]`로 막고 integrator가 리다이렉트. 기본 True.
+  - 주장을 어떻게 분해·검증할지(검증 강도, 전제 vs 결론)는 **오케가 정하지 않는다** — 리서치 클러스터의 쿼리 분해기 몫.
+- `ValidationReport`: `{subject, findings[], sources[], agreement, cluster}`, `cluster ∈ research/rag/critic`.
+- `Correction`: `{slot, previous, new, turn}` — 정정 이력.
+
+### PlanState
+
+그래프가 노드 사이로 주고받는 한 턴의 모든 것: `session_id, turn, user_input, messages[],
+turn_segments[], slots{}, correction_log[], validation_reports[], pending_clarifications[],
+pending_question, output_request`.
+`initial_state()`가 빈 한 벌을 만든다 (슬롯 10개 모두 empty).
+
+---
+
+## 2. 그래프 토폴로지 (`graph.py`)
+
+```
+START
+ └▶ segment        발화를 의미 단위로 분해 + 맥락 복원 (LLM)
+ └▶ classify       각 세그먼트 다중 라벨 + 라우팅 결정 (LLM + 결정론 덮어쓰기)
+ └▶ correction     정정 신호 처리 → 슬롯 clear/replace (LLM)
+ └▶ [clarify_branch]  ← 유일한 조건부 엣지
+      ├─ dispatch  research·rag 병렬 → critic 후속 (2단계, 워커 라우트 있을 때)
+      │    └▶ extract_fills   빈 슬롯에 값 추출 (LLM)
+      │         └▶ gate
+      └─ gate      (명확화만 있으면 dispatch 우회)
+ └▶ gate           출력 의도 판정 + Type 0/1/2 분기 (LLM)
+ └▶ conversation   다음 질문 한 문장 생성 (대화 에이전트, LLM)
+ └▶ integrator     명확화 + 워커 통지 + 다음 질문 합치기 (결정론)
+ └▶ END
+```
+
+- `build_graph()`는 `@lru_cache(maxsize=1)` — 한 번만 컴파일, 모든 턴이 공유.
+- **`_clarify_branch`**: 명확화(`clarify` 라우트)만 있고 부를 워커(research/rag/critic 라우트)가 하나도 없으면 `gate`로 직행 → 모호한 발화를 검증하지 않음 (기획서 6장 ②순위 규칙). `dispatch_node`와 같은 '워커 라우트 유무' 기준이라 부를 워커가 있으면 명확화가 섞여 있어도 dispatch로 보낸다.
+- **`run_turn(state, user_input)`**: 진입점. 턴 카운터 증가 → user 메시지 적재 → 턴 임시필드 초기화 → `graph.ainvoke` → assistant 응답을 messages에 누적.
+
+---
+
+## 3. 노드별 명세
+
+### 3.1 `segment_node` (`nodes/segment.py`)
+
+긴 발화를 **의미 단위로 분해**하고 각 조각을 **자기충족 문장(`canonical_text`)** 으로 복원.
+- 입력 프롬프트: 현재 슬롯 스냅샷 + 최근 대화 6턴 + 이번 발화.
+- LLM이 `{text, canonical_text, target_slot_hint, hints[]}` 배열 반환.
+- **`hints`로 선분류**: `correction`/`clarification`/`question`/`meta` 신호가 뚜렷한 것만 `utterance_types`에 미리 박아둠 (classify가 보존·보강).
+- `target_slot_hint`는 10개 슬롯 화이트리스트로 검증, 아니면 null.
+- 빈 발화면 `[]`, 세그먼트 0개면 원문 1개로 폴백.
+
+### 3.2 `classify_node` (`nodes/classify.py`)
+
+각 세그먼트에 **다중 라벨**(`utterance_types`) 부여 후, **결정론 매트릭스**로 라우팅 확정.
+> LLM이 매트릭스를 어기면 코드 룰(`derive_routes`)이 이긴다 — 모델 출력은 못 믿어도 비즈니스 룰은 코드로 박는다.
+
+**라우팅 매트릭스 (`_ROUTE_MATRIX`, 기획서 5장):**
+
+| 발화 유형 | clarify | research | rag | critic |
+|---|:---:|:---:|:---:|:---:|
+| clarification_needed | ● | | | |
+| claim | | ● | ● | ● |
+| opinion | | | ● | ● |
+| question | | ● | ● | |
+| correction | (correction_node 처리) | | | |
+| meta | (워커 호출 없음) | | | |
+
+> `claim`(사실·가설·결정·제약)은 research+rag+critic 모두 발동 — 라우팅이 같아 한 유형으로 묶는다.
+> 검증 세부(전제 vs 사실 vs 결정 배경)는 오케가 아니라 리서치 쿼리 분해기가 claim·slot_context를 보고 정한다.
+
+- `derive_routes`: 여러 라벨의 활성 클러스터 **합집합**, `[clarify, research, rag, critic, none]` 순서로 정렬.
+- segment가 미리 박은 라벨 보존 + LLM 추가 라벨 머지(화이트리스트·중복 제거), 둘 다 없으면 `opinion` 기본값.
+- LLM 호출은 **세그먼트 전체 배치 1회** (호출 절약), 개수 어긋나면 LLM 결과 폐기.
+
+### 3.3 `correction_node` (`nodes/correction.py`)
+
+`utterance_types`에 `correction` 있는 세그먼트만 모아 LLM이 **슬롯 갱신 액션** 결정.
+- `clear`: 슬롯 비움 + correction_log 적재.
+- `replace`: `new_value`로 교체 + `source_label=USER` + log 적재.
+- `ignore`: 모호하면 패스.
+- 슬롯명은 10개 화이트리스트 검증. 타겟 없으면 첫 액션 슬롯을 세그먼트에 표시.
+
+### 3.4 `extract_slot_fills_node` (`nodes/correction.py`)
+
+dispatch 경로에서만 실행 (그래프상 dispatch 다음). **비어있는 슬롯**에 들어갈 값을 세그먼트에서 추출.
+- 후보 = `claim/opinion` 라벨 가진 세그먼트.
+- 빈 슬롯 없으면 LLM 호출 안 함 (비용 절약).
+- 추출값은 `source_label=USER`, 빈 슬롯에만 채움 (이미 찬 슬롯은 correction_node 담당).
+
+### 3.5 `parallel_dispatch_workers_node` (`nodes/dispatch.py`)
+
+**워커 라우트(`research/rag/critic`)를 가진** 세그먼트를 보고 워커를 **2단계로 호출**.
+> 라우트 유무로 판단 — `opinion`(routes=`rag·critic`)도 매트릭스대로 디스패치된다.
+> 명확화-only 턴은 `_clarify_branch`가 dispatch 자체를 우회하므로 보류된다.
+
+**2단계 디스패치** (critic_spec §6 "리서치·RAG 병렬 → 비평 후속"):
+```python
+# 1단계: 외부 사실 + 회사 문서 — 전 세그먼트 병렬
+research → run_research(subject)            # asyncio.gather
+rag      → run_rag_check(subject)
+# 2단계: 비평 — 같은 세그먼트의 1단계 산출물을 입력으로
+critic   → run_critic(subject, slots,
+                      research_report, rag_context)   # asyncio.gather
+```
+> **왜 2단계인가** — 비평의 정합성(consistency) 모드는 '사용자 주장 ↔ 외부 사실/회사 문서'를
+> 비교하므로 `research_report·rag_context`가 먼저 있어야 한다. 추론(reasoning) 점검은 근거 없이도
+> 가능해, research/rag 라우트가 없는 세그먼트의 critic은 두 입력이 `None`으로 돌아간다(현 매트릭스엔
+> 그런 조합 없음 — critic은 항상 rag와 동반).
+>
+> v0.7.5: "검증" 단계가 사라지고 세 갈래 워커 디스패치로 분리. **비평(Critic)은 라벨링된
+> 발화 + 슬롯 상태(read-only) + 1단계 산출물**을 받음 (기획서 11장 1주차 픽스 #3). 결과는
+> `validation_reports`에 누적. 워커는 현재 모두 **stub** (실제 검색·추론은 다음 단계).
+
+### 3.6 `gate_node` (`nodes/gate.py`)
+
+출력 게이트 — 기획서 8장 Type 0/1/2.
+1. `detect_output_request`: LLM 1회로 `wants_output` 판정 (키워드 false positive 회피).
+2. false면 `output_request=None` (일반 대화 턴).
+3. 분기 (결정론):
+
+| 조건 | 결과 |
+|---|---|
+| 필수 슬롯(P·T·G) 미달 | **Type 0** — 출력 거절 |
+| 선택 슬롯도 다 참 | **Type 1** — 정상 완료 |
+| 그 외 (필수만 참) | **Type 2** — 조기 출력 (빈칸 `[미정]`) |
+
+`required_missing` / `optional_missing` 헬퍼는 다른 노드도 재사용.
+
+### 3.7 `conversation_node` (`agents/conversation/agent.py`)
+
+오케가 정한 **"다음 채울 슬롯 + 모드"** 를 자연어 한 문장으로 변환 (대화 에이전트).
+- 다음 슬롯: **`ALL_SLOTS` 자연 순서의 첫 빈칸**(필수/선택 안 가림). 그래서 `goal`도 solution·market·advantage·revenue 뒤(7번째)에 물어진다.
+- 모드 결정: 출력요청+필수미달이면 `type0`→거절(막은 필수 슬롯 지목), 그 외엔 고른 슬롯이 필수면 `required`·선택이면 `optional`, 다 차면 출력 권유(LLM 없이 고정 문구).
+- 슬롯별 **few-shot 톤 예시**(`_FEW_SHOT`)를 프롬프트에 주입.
+- **분류는 안 함** — 오케스트레이터가 끝낸 결정을 톤·길이만 입혀 표현.
+
+### 3.8 `response_integrator_node` (`nodes/integrator.py`)
+
+**LLM 호출 없는 결정론** 통합기. 한 문단으로 합침:
+- 명확화(`clarify` 라우트) 세그먼트 → "먼저 명확히 — …" (최대 2개).
+- 워커 라우트(research/rag/critic) 세그먼트 → "…쪽은 백그라운드에서 …" 통지.
+- 명확화가 있으면 다음 질문은 보류(다음 턴), 없으면 워커 통지 + `conversation`의 질문 순.
+
+---
+
+## 4. LLM 호출 헬퍼 (`llm.py`)
+
+모든 LLM 노드는 `call_json(system, user, schema)` 하나만 부른다.
+- **mock 모드** (`BPM_LLM_MODE=mock` 또는 키 없음): `register_mock(key, handler)`로 등록된 가짜 응답. key = system 프롬프트 **첫 줄**.
+- **live 모드**: `langchain-openai ChatOpenAI`, JSON 모드 + 스키마 힌트 주입 + pydantic 검증, 실패 시 1회 재시도.
+- 3단 방어: 프롬프트에 스키마 박기 → JSON 모드 → pydantic `model_validate`.
+
+---
+
+## 5. 매 턴 처리 패턴 (메시지 종류별)
+
+| 메시지 종류 | 워커 호출 | 슬롯 변경 | 분기 |
+|---|---|---|---|
+| 신규 단일 발화 | 라벨에 따라 | 잠재적 | 9유형 라벨링 → 매트릭스 |
+| 신규 다중 발화 | 세그먼트별 병렬 | 잠재적 | 라우트별 분기 |
+| 정정 신호 | (재검증 보류 — 아래 갭) | **필수** | correction_node 먼저 |
+| 출력 요청 | Planner (게이트 통과 시) | 없음 | Type 0/1/2 |
+| 스코프 밖 발화 | 없음 (리다이렉트) | 없음 | `in_scope=false` → routes none |
+| 메타·단순응답 | 없음 | 없음 | "응"·"다음" 등 |
+
+> **신호 키워드 정확도**("말고"·"빼자"·"뽑아줘")가 성능의 큰 부분. 첫 단계인
+> 메시지 종류 판단이 어긋나면 그 턴 전체가 어긋난다.
+
+### 기획서 대비 보강·갭
+
+- **보강 (코드 > 기획서)**: 발화 유형 `question`(8→9), 슬롯 `advantage`(차별점, 9→10) 추가.
+- **알려진 갭 (코드 < 기획서)**: 정정(correction) 시 교체된 슬롯 값의 **재검증 미동작**.
+  기획서 5장은 리서치·RAG '재발동'을 요구하지만 현재는 슬롯 덮어쓰기만 함
+  (`correction.py`의 TODO). 실 워커 연결 시 구현 예정.
+
+---
+
+## 6. 설계 원칙 (코드에 박힌 것)
+
+1. **상시 진입점** — 조건부가 아니라 모든 메시지가 오케스트레이터를 거친다.
+2. **판단/표현 분리** — 무엇을 물을지(오케) vs 어떻게 물을지(대화).
+3. **분류 일원화** — 8유형 라벨링은 오케 단독. 비평·워커는 라벨링된 발화를 입력으로만 받음.
+4. **LLM은 제안, 코드는 결정** — 라우팅·분기·Type 판정은 결정론 함수가 최종 확정.
+5. **새로 추가된 것만 처리** — 매 턴 전체 재계산 X. 정정 이력은 별도 추적.
+6. **입력은 분해, 출력은 절제** — 세그멘테이션 + 다중 라벨 + 라우팅 / 응답은 명확화 + 핵심 질문 1~2개.
+7. **필수 슬롯이 게이트** — P·T·G 미달이면 어떤 출력 요청도 거절(방어 코드).
+
+---
+
+## 7. 파일 맵
+
+```
+agents/orchestrator/
+├─ graph.py              토폴로지 조립 + run_turn (진입점)
+├─ llm.py                call_json (mock/live, 구조화 출력)
+├─ ORCHESTRATOR.md       (이 문서)
+└─ nodes/
+   ├─ segment.py         세그멘테이션 + 맥락 복원
+   ├─ classify.py        다중 라벨 + 라우팅 매트릭스
+   ├─ correction.py      정정 해소 + 슬롯 채움
+   ├─ dispatch.py        리서치·RAG 병렬 → 비평 2단계 호출
+   ├─ gate.py            출력 게이트 Type 0/1/2/3
+   ├─ integrator.py      응답 통합 (결정론)
+   └─ router.py          (deprecated)
+
+agents/conversation/agent.py   대화 에이전트 (질문 생성)
+agents/{research,rag,critic}/  워커 stub
+common/schema/{state,labels}.py  슬롯·라벨·타입 정의
+```
