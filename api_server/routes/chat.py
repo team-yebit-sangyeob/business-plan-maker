@@ -44,22 +44,29 @@ async def _stream(session_id: str, text: str) -> AsyncIterator[dict]:
     new_state = await run_turn(state, text)
     store.update(session_id, new_state)
 
-    # 1) 응답 토큰을 잘게 흘려서 SSE 느낌 살리기 (pending_question을 타이핑처럼)
+    # 1) 에이전트 활동 — 실행 중 → 결과 (클로드 도구 사용처럼). 답변 텍스트보다 먼저.
+    #    이번 턴 디스패치 결과만(turn_validation_reports). 리서치·RAG → 비평 순서로 보여
+    #    실제 2단계 디스패치를 반영한다.
+    turn_reports = new_state.get("turn_validation_reports") or []
+    _stage = {"research": 0, "rag": 1, "critic": 2}
+    ordered = sorted(turn_reports, key=lambda r: _stage.get(r.get("cluster", ""), 3))
+    for r in ordered:  # 먼저 전부 '실행 중'으로 띄움
+        yield {
+            "event": "message",
+            "data": json.dumps(
+                {"type": "agent_start", "cluster": r.get("cluster"), "subject": r.get("subject", "")}
+            ),
+        }
+        await asyncio.sleep(0.12)
+    for r in ordered:  # 결과 카드로 하나씩 해소
+        yield {"event": "message", "data": json.dumps({"type": "validation_report", **r})}
+        await asyncio.sleep(0.18)
+
+    # 2) 응답 토큰을 잘게 흘려서 SSE 느낌 살리기 (pending_question을 타이핑처럼)
     question = new_state.get("pending_question") or ""
     for chunk in _chunk_text(question, size=12):
         yield {"event": "message", "data": json.dumps({"type": "token", "text": chunk})}
         await asyncio.sleep(0.03)
-
-    # 2) 검증 리포트들 (cluster 라벨 포함)
-    new_reports = new_state.get("validation_reports") or []
-    prev_count = len(state.get("validation_reports") or [])
-    for report in new_reports[prev_count:]:
-        payload = {"type": "validation_report", **report}
-        payload.setdefault("cluster", "research")
-        yield {
-            "event": "message",
-            "data": json.dumps(payload),
-        }
 
     # 3) 슬롯 변경분
     new_slots = new_state.get("slots") or {}
