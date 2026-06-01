@@ -19,35 +19,47 @@ function SlotRow({
 }) {
   const filled = slot?.status === "filled";
   const required = isRequiredSlot(name);
+  const value = filled ? slot?.value?.trim() : "";
   return (
-    <li className="flex items-center gap-2 py-1.5 text-sm">
-      <span className="w-4 shrink-0 text-right font-mono text-[10px] text-muted-foreground/60">
-        {index + 1}
-      </span>
-      <span
-        className={
-          filled
-            ? "inline-block w-1.5 h-1.5 rounded-full bg-foreground"
-            : "inline-block w-1.5 h-1.5 rounded-full border border-muted-foreground/50"
-        }
-      />
-      <span
-        className={[
-          required ? "font-bold" : "font-normal",
-          filled ? "text-foreground" : "text-muted-foreground",
-        ].join(" ")}
-      >
-        {SLOT_TITLES[name as keyof typeof SLOT_TITLES] ?? name}
-      </span>
-      {required && (
-        <span className="text-[9px] uppercase tracking-wider text-accent font-mono border border-accent/40 rounded px-1 leading-tight">
-          필수
+    <li className="py-1.5 text-sm">
+      <div className="flex items-center gap-2">
+        <span className="w-4 shrink-0 text-right font-mono text-[10px] text-muted-foreground/60">
+          {index + 1}
         </span>
-      )}
-      {filled && slot?.source_label && (
-        <span className="ml-auto text-[10px] uppercase tracking-wider text-muted-foreground font-mono">
-          {SOURCE_LABEL_KO[slot.source_label]}
+        <span
+          className={
+            filled
+              ? "inline-block w-1.5 h-1.5 rounded-full bg-foreground"
+              : "inline-block w-1.5 h-1.5 rounded-full border border-muted-foreground/50"
+          }
+        />
+        <span
+          className={[
+            required ? "font-bold" : "font-normal",
+            filled ? "text-foreground" : "text-muted-foreground",
+          ].join(" ")}
+        >
+          {SLOT_TITLES[name as keyof typeof SLOT_TITLES] ?? name}
         </span>
+        {required && (
+          <span className="text-[9px] uppercase tracking-wider text-accent font-mono border border-accent/40 rounded px-1 leading-tight">
+            필수
+          </span>
+        )}
+        {filled && slot?.source_label && (
+          <span className="ml-auto text-[10px] uppercase tracking-wider text-muted-foreground font-mono">
+            {SOURCE_LABEL_KO[slot.source_label]}
+          </span>
+        )}
+      </div>
+      {/* 채워진 슬롯이 '어떤 내용으로' 채워졌는지 — 제목 아래에. 긴 값은 2줄 클램프 + hover 전체. */}
+      {value && (
+        <p
+          className="ml-8 mt-0.5 text-xs text-muted-foreground break-words line-clamp-2"
+          title={value}
+        >
+          {value}
+        </p>
       )}
     </li>
   );
