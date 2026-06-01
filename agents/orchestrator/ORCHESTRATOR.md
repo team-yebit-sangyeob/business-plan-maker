@@ -9,8 +9,8 @@
 ## 0. 한 문장 요약
 
 매 사용자 메시지마다 **단일 진입점**으로 들어와, LangGraph 상태머신이
-`segment → classify → correction → (dispatch → extract_fills) → gate → conversation → integrator`
-순서로 흐르며 **분류·세그멘테이션·라우팅·슬롯 추적·출력 게이트**를 수행한다.
+`confirm_resolve → segment → classify → correction → (dispatch → extract_fills) → gate → conversation → integrator`
+순서로 흐르며 **(보류된 슬롯 확인 해소)·분류·세그멘테이션·라우팅·슬롯 추적·출력 게이트**를 수행한다.
 판단(무엇을 할지)만 오케스트레이터가 하고, 표현(자연어)·실행(검색·추론)은 워커가 맡는다.
 
 ---
@@ -45,6 +45,8 @@ OPTIONAL_SLOTS = tuple(s for s in ALL_SLOTS if s not in REQUIRED_SLOTS)
 > **필수 ≠ 먼저 질문.** `goal`은 필수(게이트 조건)지만 질문은 7번째 — 솔루션·수익모델을 모르면 측정 가능한 목표가 안 나오므로 일부러 늦췄다. "필수냐"(게이트 멤버십)와 "몇 번째로 묻느냐"(질문 순서)를 분리.
 > `advantage`(차별점·경쟁우위)는 기획서 9슬롯 외에 도메인 보강으로 추가한 슬롯 — "왜 우리인가".
 
+**슬롯 정의의 단일 원천 = `SLOT_SPECS`** (`state.py`). 각 슬롯에 `{title, definition, boundary, question}`을 두고, `slot_guide_text()`가 이를 `"- solution (솔루션): <정의> | 경계: <경계규칙>"` 한 블록으로 렌더한다. **segment·extract_slot_fills·correction 프롬프트가 모두 이 한 함수를 임베드**해 같은 정의·경계를 공유한다(예전엔 정의가 네 곳에 흩어져 같은 내용이 호출마다 다른 슬롯에 들어가곤 했다). `boundary`("이건 여기 NOT 저기")는 헷갈리는 이웃 슬롯 경계를 못박은 것 — `solution↔revenue`(무엇을 만드나 vs 어떻게 버나), `goal↔revenue`(목표 수치 vs 과금 방식), `market↔advantage`(경쟁사 데이터 vs 우리 우위) 등 8쌍. 이 경계는 동시에 fill이 "한 슬롯에 깔끔히 안 떨어지면 `ambiguous`로 보류"하는 판정 근거가 된다(§3.4).
+
 각 `Slot` = `{value, source_label, status}`.
 - `source_label` ∈ `SourceLabel` (`common/schema/labels.py`): `user / research / empty` (3종)
   → **출처 라벨은 기획서 3.3 그대로 유지** (에이전트 이름은 critic으로 바뀌었지만 라벨 enum은 불변).
@@ -74,8 +76,11 @@ OPTIONAL_SLOTS = tuple(s for s in ALL_SLOTS if s not in REQUIRED_SLOTS)
 
 그래프가 노드 사이로 주고받는 한 턴의 모든 것: `session_id, turn, user_input, messages[],
 turn_segments[], slots{}, correction_log[], validation_reports[], turn_validation_reports[],
-pending_clarifications[], pending_question, output_request`.
+pending_clarifications[], pending_question, output_request, pending_confirmations[]`.
 `initial_state()`가 빈 한 벌을 만든다 (슬롯 10개 모두 empty).
+> `pending_confirmations[]`는 **애매해서 주입을 보류한 슬롯 값 큐**(`PendingConfirmation`). fill이
+> `ambiguous`로 본 값을 슬롯 대신 여기 쌓고, 다음 턴 `confirm_resolve`가 사용자 답으로 해소한다.
+> 다른 턴 임시필드와 달리 `run_turn`이 리셋하지 않아 **턴을 넘어 영속**(세션 스토어가 통째 저장).
 > `validation_reports`는 **누적**, `turn_validation_reports`는 **이번 턴 dispatch 결과만**(매 턴 리셋).
 > 대화 에이전트의 결과 보고가 '방금 돌린 것'만 보도록 분리(`turn_validation_reports`).
 > SSE 에이전트 활동(`agent_start`→`validation_report`)은 `_stream`이 사후 재생하지 않고
@@ -88,6 +93,7 @@ pending_clarifications[], pending_question, output_request`.
 
 ```
 START
+ └▶ confirm_resolve 보류된 슬롯 확인 해소 (pending 있을 때만; 없으면 no-op) (LLM)
  └▶ segment        발화를 의미 단위로 분해 + 맥락 복원 (LLM)
  └▶ classify       각 세그먼트 다중 라벨 + 라우팅 결정 (LLM + 결정론 덮어쓰기)
  └▶ correction     정정 신호 처리 → 슬롯 clear/replace (LLM)
@@ -110,13 +116,22 @@ START
 
 ## 3. 노드별 명세
 
+### 3.0 `confirm_resolve_node` (`nodes/confirm.py`)
+
+**토폴로지상 맨 앞(START 직후)** — `pending_confirmations`가 비어 있으면 no-op이라 일반 턴엔 영향이 없다. 큐에 보류 건이 있으면(직전 턴에 fill이 애매하다고 판단해 쌓아둔 것), 이번 사용자 발화를 그 확인 질문에 대한 답으로 보고 LLM이 판정:
+- `pick`: 후보 슬롯 중 하나를 고르거나 긍정 → 그 슬롯에 보류값 주입(이미 찬 슬롯이면 덮지 않음) + 큐에서 제거.
+- `reject`: "아니/빼" 등 부정 → 큐에서 제거(슬롯은 빈 채).
+- `unclear`: 그 질문과 무관한 다른 얘기 → `attempts++`; 한도(2회) 넘으면 제안 슬롯으로 자동 확정(무한 재질문 방지), 아니면 유지(다음 턴 재질문).
+
+해소 후에도 파이프라인은 계속 흐른다 — 같은 발화에 추가 정보가 있으면 segment 이하가 정상 처리하고, 방금 채운 슬롯은 더 이상 empty가 아니라 fill이 다시 건드리지 않는다.
+
 ### 3.1 `segment_node` (`nodes/segment.py`)
 
 긴 발화를 **의미 단위로 분해**하고 각 조각을 **자기충족 문장(`canonical_text`)** 으로 복원.
 - 입력 프롬프트: 현재 슬롯 스냅샷 + 최근 대화 6턴 + 이번 발화.
 - LLM이 `{text, canonical_text, target_slot_hint, hints[]}` 배열 반환.
 - **`hints`로 선분류**: `correction`/`clarification`/`question`/`meta` 신호가 뚜렷한 것만 `utterance_types`에 미리 박아둠 (classify가 보존·보강).
-- `target_slot_hint`는 10개 슬롯 화이트리스트로 검증, 아니면 null.
+- 프롬프트에 `slot_guide_text()`(정의·경계)를 임베드 — `target_slot_hint`를 슬롯 *이름*이 아니라 *정의*로 고른다. 10개 화이트리스트 검증, 경계가 헷갈리면 null로 두고 슬롯 확정은 fill에 위임.
 - 빈 발화면 `[]`, 세그먼트 0개면 원문 1개로 폴백.
 
 ### 3.2 `classify_node` (`nodes/classify.py`)
@@ -149,13 +164,15 @@ START
 - `replace`: `new_value`로 교체 + `source_label=USER` + log 적재.
 - `ignore`: 모호하면 패스.
 - 슬롯명은 10개 화이트리스트 검증. 타겟 없으면 첫 액션 슬롯을 세그먼트에 표시.
+- `_CORR_SYSTEM`도 `slot_guide_text()`를 임베드 — 정정 시 슬롯 매칭이 fill·segment와 같은 정의·경계를 쓴다.
 
 ### 3.4 `extract_slot_fills_node` (`nodes/correction.py`)
 
-dispatch 경로에서만 실행 (그래프상 dispatch 다음). **비어있는 슬롯**에 들어갈 값을 세그먼트에서 추출.
-- 후보 = `claim/opinion` 라벨 가진 세그먼트.
-- 빈 슬롯 없으면 LLM 호출 안 함 (비용 절약).
-- 추출값은 `source_label=USER`, 빈 슬롯에만 채움 (이미 찬 슬롯은 correction_node 담당).
+dispatch 경로에서만 실행 (그래프상 dispatch 다음). **비어있는 슬롯**에 들어갈 값을 세그먼트에서 추출하고, **슬롯 선택의 단일 권위**다(segment의 `target_slot` 힌트는 payload에 prior로만 넘겨 두 판단이 갈리는 걸 줄인다).
+- 후보 = `claim/opinion` 라벨 가진 세그먼트. 빈 슬롯 없으면 LLM 호출 안 함 (비용 절약).
+- `_FILL_SYSTEM`에 `slot_guide_text()` 임베드. LLM은 fill마다 `{slot, value, confidence(clear|ambiguous), alt_slots[], reason}` 반환.
+- **명확(`clear`)** → 빈 슬롯에 즉시 주입(`source_label=USER`). 이미 찬 슬롯은 correction_node 담당.
+- **애매(`ambiguous` 또는 `alt_slots` 있음)** → 주입하지 않고 `pending_confirmations`에 한 건 쌓음(후보 중 빈 슬롯이 하나도 없으면 스킵). 다음 턴 `confirm_resolve`(§3.0)가 사용자 답으로 확정. → "같은 내용이 다른 슬롯에 들어가는" 문제를 (a)경계 명문화 (b)선택 단일화 (c)애매 시 사용자 확인으로 막는다.
 
 ### 3.5 `parallel_dispatch_workers_node` (`nodes/dispatch.py`)
 
@@ -200,14 +217,15 @@ critic   → run_critic(subject, slots,
 | 그 외 (필수만 참) | **Type 2** — 조기 출력 (빈칸 `[미정]`) |
 
 `required_missing` / `optional_missing` 헬퍼는 다른 노드도 재사용.
+- 출력 요청(`wants_output`)이 잡히면 `pending_confirmations`를 비운다 — 사용자가 진행을 택했으니 보류 중인 슬롯 확인은 흘려보낸다(출력 흐름과 충돌 방지).
 
 ### 3.7 `conversation_node` (`agents/conversation/agent.py`)
 
 state에서 **intent 목록을 결정론으로 뽑아**(`_build_intents`) **LLM 1회로 한 응답으로 렌더** (대화 에이전트). conversation_spec TRIGGER MATRIX 전체를 지원:
-`ask_slot · clarify · report_findings · answer_question · redirect · reject_output · acknowledge · deliver_plan`.
+`ask_slot · confirm_slot · clarify · report_findings · answer_question · redirect · reject_output · acknowledge · deliver_plan`.
 > 구현 차이: conversation_spec은 `report_research`·`report_critique`를 별도 intent로 두지만, 코드는 한 주제의 research·rag·critic 결과를 **`report_findings` 하나로 통합**해 넘긴다(렌더 프롬프트가 출처별로 구분). spec이 "둘은 한 턴에 묶일 수 있다(통합은 integrator 몫)"고 한 것을 그대로 반영.
-- **intent 선택(결정론)**: 이번 턴 정정→`acknowledge`, `in_scope=false`→`redirect`, `turn_validation_reports`→주제별 `report_findings`(claim·opinion) 또는 `answer_question`(question), `output_request`→`reject_output`(type0)·`deliver_plan`(type1/2), `clarify` 라우트→`clarify`. 위에서 막지 않았으면 `ALL_SLOTS` 첫 빈칸으로 `ask_slot`(clarify·type0·deliver가 있으면 다음 질문 보류).
-- **렌더(LLM)**: intent 목록 JSON을 받아 한 메시지로 매끄럽게 연결(예: 결과 보고 → 다음 질문). 슬롯별 few-shot 톤 예시(`_FEW_SHOT`) 주입.
+- **intent 선택(결정론)**: 이번 턴 정정→`acknowledge`, `pending_confirmations`→`confirm_slot`(보류값과 후보 슬롯 제시), `in_scope=false`→`redirect`, `turn_validation_reports`→주제별 `report_findings`(claim·opinion) 또는 `answer_question`(question), `output_request`→`reject_output`(type0)·`deliver_plan`(type1/2), `clarify` 라우트→`clarify`. 위에서 막지 않았고 **확인 대기(`confirm_slot`)도 없으면** `ALL_SLOTS` 첫 빈칸으로 `ask_slot`(confirm_slot·clarify·type0·deliver가 있으면 다음 질문 보류).
+- **렌더(LLM)**: intent 목록 JSON을 받아 한 메시지로 매끄럽게 연결(예: 결과 보고 → 다음 질문). 슬롯별 질문 톤은 `SLOT_SPECS[...]["question"]`(단일 원천)에서 가져와 `ask_slot.example`로 주입.
 - **분류·판단은 안 함** — 무엇을 보고/질문할지는 state에서 파생, 대화는 표현만.
 
 ### 3.8 `response_integrator_node` (`nodes/integrator.py`)
@@ -237,6 +255,7 @@ state에서 **intent 목록을 결정론으로 뽑아**(`_build_intents`) **LLM 
 | 출력 요청 | Planner (게이트 통과 시) | 없음 | Type 0/1/2 |
 | 스코프 밖 발화 | 없음 (리다이렉트) | 없음 | `in_scope=false` → routes none |
 | 메타·단순응답 | 없음 | 없음 | "응"·"다음" 등 |
+| 애매한 슬롯 값 | 라벨에 따라 | 보류→확인 후 | fill `ambiguous` → `confirm_slot` → 다음 턴 `confirm_resolve` |
 
 > **신호 키워드 정확도**("말고"·"빼자"·"뽑아줘")가 성능의 큰 부분. 첫 단계인
 > 메시지 종류 판단이 어긋나면 그 턴 전체가 어긋난다.
@@ -270,9 +289,10 @@ agents/orchestrator/
 ├─ llm.py                call_json (mock/live, 구조화 출력)
 ├─ ORCHESTRATOR.md       (이 문서)
 └─ nodes/
+   ├─ confirm.py         애매한 슬롯 주입 확인 해소 (pending 큐, START 직후)
    ├─ segment.py         세그멘테이션 + 맥락 복원
    ├─ classify.py        다중 라벨 + 라우팅 매트릭스
-   ├─ correction.py      정정 해소 + 슬롯 채움
+   ├─ correction.py      정정 해소 + 슬롯 채움 (애매하면 pending 큐로 보류)
    ├─ dispatch.py        리서치·RAG 병렬 → 비평 2단계 호출
    ├─ gate.py            출력 게이트 Type 0/1/2
    ├─ integrator.py      응답 통합 (결정론)
