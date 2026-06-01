@@ -26,7 +26,7 @@ from typing import Optional
 
 from pydantic import BaseModel, Field
 
-from common.schema import PlanState, Correction, Slot
+from common.schema import PlanState, Correction
 from common.schema.labels import SourceLabel
 from common.schema.state import ALL_SLOTS
 from agents.orchestrator.llm import call_json
@@ -207,9 +207,3 @@ async def extract_slot_fills_node(state: PlanState) -> dict:
                 break
 
     return {"slots": slots, "turn_segments": segments}
-
-
-# 하위 호환 — 기존 라우터가 import할 수 있는 동기 함수 자리(deprecated)
-def collect_slot_fills(state: PlanState) -> dict:
-    """deprecated — extract_slot_fills_node로 대체됨."""
-    return {"slots": dict(state.get("slots") or {})}

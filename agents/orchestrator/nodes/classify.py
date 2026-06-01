@@ -24,7 +24,7 @@ from __future__ import annotations
 from pydantic import BaseModel, Field
 
 from common.schema import PlanState
-from common.schema.state import Route, UtteranceType
+from common.schema.state import Route
 from agents.orchestrator.llm import call_json
 
 

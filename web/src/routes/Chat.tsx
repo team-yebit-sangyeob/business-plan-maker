@@ -115,6 +115,19 @@ export default function Chat() {
         await streamChat(session.session_id, text, onEvent);
       } catch (e) {
         setError(String(e));
+        // 스트림 실패 시 비어 있는 에이전트 말풍선 제거(빈 박스 잔류 방지)
+        setMessages((prev) =>
+          prev.filter(
+            (m) =>
+              !(
+                m.id === currentAgentId.current &&
+                m.role === "agent" &&
+                !m.text &&
+                !(m.activities && m.activities.length > 0) &&
+                !m.pdf
+              ),
+          ),
+        );
       } finally {
         streamingRef.current = false;
         setStreaming(false);

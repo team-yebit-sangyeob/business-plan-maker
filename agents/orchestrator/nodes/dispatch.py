@@ -16,9 +16,6 @@ from __future__ import annotations
 import asyncio
 
 from common.schema import PlanState, ValidationReport, VerificationRequest
-from agents.research import run_research
-from agents.rag.stub import run_rag_check
-from agents.critic.stub import run_critic
 from agents.orchestrator.progress import emit
 from agents.orchestrator.llm import _resolve_mode
 
@@ -59,6 +56,12 @@ def _verification_request(
 
 
 async def parallel_dispatch_workers_node(state: PlanState) -> dict:
+    # worker import는 함수 안에서 — 모듈 로드 시 agents.{research,rag,critic} ↔
+    # agents.orchestrator 패키지 순환 import를 피한다(import 순서 의존 크래시 방지).
+    from agents.research import run_research
+    from agents.rag.stub import run_rag_check
+    from agents.critic.stub import run_critic
+
     segments = state.get("turn_segments") or []
     slots = state.get("slots") or {}
 
@@ -139,7 +142,5 @@ async def parallel_dispatch_workers_node(state: PlanState) -> dict:
     if not reports:
         return {}
 
-    existing = list(state.get("validation_reports") or [])
-    existing.extend(reports)
-    # turn_validation_reports = 이번 턴 것만(대화 보고·SSE 활동용). validation_reports는 누적.
-    return {"validation_reports": existing, "turn_validation_reports": reports}
+    # turn_validation_reports = 이번 턴 dispatch 결과만(대화 보고·SSE 활동용).
+    return {"turn_validation_reports": reports}

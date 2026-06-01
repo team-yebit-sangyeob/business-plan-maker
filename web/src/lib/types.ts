@@ -69,9 +69,10 @@ export type ChatEvent =
       type: "validation_report";
       cluster: ClusterName;
       subject: string;
-      findings: string[];
-      sources: string[];
-      agreement: string;
+      // 백엔드 ValidationReport는 total=False — 필드가 빠질 수 있어 옵셔널.
+      findings?: string[];
+      sources?: string[];
+      agreement?: string;
     }
   | {
       type: "slot_update";
@@ -80,7 +81,6 @@ export type ChatEvent =
       source_label: SourceLabel;
       status: Slot["status"];
     }
-  | { type: "candidates"; slot: string; options: string[] }
   | { type: "done"; next_question: string; output_request: string | null };
 
 // 채팅창에 보여줄 에이전트 활동 한 줄 — 실행 중(running)으로 떴다가 결과(done)로 해소.

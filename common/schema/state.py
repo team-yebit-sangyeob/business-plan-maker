@@ -117,7 +117,6 @@ def initial_state() -> "PlanState":
         "turn_segments": [],
         "slots": {name: _empty_slot() for name in ALL_SLOTS},
         "correction_log": [],
-        "validation_reports": [],
         "turn_validation_reports": [],
         "pending_clarifications": [],
         "pending_question": "",
@@ -134,9 +133,8 @@ class PlanState(TypedDict, total=False):
     turn_segments: list[Segment]
     slots: dict[str, Slot]
     correction_log: list[Correction]
-    validation_reports: list[ValidationReport]
     # 이번 턴 dispatch가 낸 리포트만 — 매 턴 리셋. 대화 에이전트의 결과 보고와
-    # SSE 에이전트 활동 표시가 '방금 돌린 것'만 보도록 누적본과 분리해 둔다.
+    # SSE 에이전트 활동 표시에 쓴다.
     turn_validation_reports: list[ValidationReport]
 
     pending_clarifications: list[str]

@@ -15,7 +15,7 @@ end-to-end trace 예시 (turn 5, "카카오는 빼자. 예산은 1억으로 가�
   classify     → seg1=["correction"](routes=none), seg2=["claim"](routes=research/rag/critic)
   correction   → target "네이버·카카오" → "네이버" (correction_log에 기록)
   clarify_gate → clarify 라우트 없고 워커 라우트 있음 → "dispatch"
-  dispatch     → seg2 canonical을 research·rag·critic 병렬 호출 → validation_reports 누적
+  dispatch     → seg2 canonical을 research·rag·critic 병렬 호출 → turn_validation_reports 적재
   extract_fills→ 빈 슬롯에 "예산 1억" 채울 수 있으면 resources 등에 반영
   gate         → "가자"는 출력요청 아님 → output_request=None
   conversation → 다음 빈 필수/선택 슬롯 1개 질문 생성
