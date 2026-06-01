@@ -1,26 +1,44 @@
 import { useState } from "react";
+import {
+  AGREEMENT_KO,
+  CLUSTER_BADGE,
+  CLUSTER_LABEL,
+  type ClusterName,
+} from "../lib/types";
 
 interface Props {
+  cluster: ClusterName;
   subject: string;
   findings: string[];
   sources: string[];
   agreement: string;
 }
 
-export function ValidationCard({ subject, findings, sources, agreement }: Props) {
+export function ValidationCard({
+  cluster,
+  subject,
+  findings,
+  sources,
+  agreement,
+}: Props) {
   const [open, setOpen] = useState(false);
   return (
-    <div className="mt-2 border border-border rounded-md bg-muted/40">
+    <div className="border border-border rounded-md bg-muted/40">
       <button
         type="button"
         onClick={() => setOpen((o) => !o)}
-        className="w-full flex items-center justify-between px-3 py-2 text-left hover:bg-muted/70 transition-colors rounded-md"
+        className="w-full flex items-center gap-2 px-3 py-2 text-left hover:bg-muted/70 transition-colors rounded-md"
       >
-        <span className="text-xs font-mono uppercase tracking-wider text-muted-foreground">
-          {open ? "▾" : "▸"} 검증 리포트
+        <span
+          className={`shrink-0 px-1.5 py-0.5 rounded text-[10px] font-mono font-medium border ${CLUSTER_BADGE[cluster]}`}
+        >
+          {CLUSTER_LABEL[cluster]}
         </span>
-        <span className="text-xs text-muted-foreground truncate ml-3">
+        <span className="text-xs text-muted-foreground truncate flex-1">
           {subject}
+        </span>
+        <span className="shrink-0 text-xs text-muted-foreground">
+          {open ? "▾" : "▸"}
         </span>
       </button>
       {open && (
@@ -37,7 +55,7 @@ export function ValidationCard({ subject, findings, sources, agreement }: Props)
           </div>
           <div>
             <div className="font-mono text-[10px] uppercase tracking-wider text-muted-foreground mb-1">
-              출처 · 일치도: {agreement}
+              출처 · 일치도: {AGREEMENT_KO[agreement] ?? agreement}
             </div>
             <ul className="text-xs text-muted-foreground font-mono">
               {sources.map((s, i) => (

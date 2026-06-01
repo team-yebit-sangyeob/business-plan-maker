@@ -149,6 +149,7 @@ _VALIDATOR_SYSTEM = f"""
 * claim
 * highlight
 * raw_source
+* (선택) [EXTERNAL RESEARCH] — 외부 웹 사실 보조 근거. 제공될 때만 존재.
 
 당신의 목표는 claim 과 evidence 사이의 논리적 관계를 판정하는 것입니다.
 단, claim 검증을 수행하기 전에 반드시 highlight 의 품질을 검증해야 합니다.
@@ -190,6 +191,13 @@ Step 2: Claim Validation
 	3. evidence 가 모호하거나 불충분하면 search_vector_db 툴을 호출하여 추가 evidence 를 수집하세요.
 	4. 추가 검색은 최대 {MAX_VALIDATOR_TURNS} 회 수행 가능합니다.
 	5. 모든 evidence 를 검토한 뒤 최종 verdict 를 결정하세요.
+
+- evidence 우선순위:
+	1차 = 사내 RAG 근거(highlight/raw_source). claim 판정의 주된 근거.
+	보조 = [EXTERNAL RESEARCH](있을 때만). 사내 근거가 모호·불충분할 때 방향을 보조하는 참고용.
+	[EXTERNAL RESEARCH]가 제공되지 않으면 평소처럼 사내 근거만으로 판정한다.
+	외부 리서치만으로 verdict 를 'supports'로 올리지 말 것 — 사내 근거가 약하면 'insufficient'를 유지하고
+	reasoning 에 외부 근거가 시사하는 바를 적는다.
 
 [verdict 정의]
 - "supports"     : highlight 가 claim 을 직접·명시적으로 논리적으로 뒷받침함.
@@ -242,6 +250,7 @@ class ValidatorAgent:
         keywords: List[str],
         source_file: str,
         source_page: str,
+        research_evidence: Optional[str] = None,
         verbose: bool = True,
     ) -> Tuple[ValidatorResult, List[dict], List[dict]]:
         """
@@ -266,6 +275,7 @@ class ValidatorAgent:
         :param keywords:       RAG 검색에 사용된 키워드 목록
         :param source_file:    출처 파일명
         :param source_page:    출처 페이지
+        :param research_evidence: 외부 리서치 보조 근거 텍스트(없으면 None — 사내 RAG 근거만으로 판정)
         :param verbose:        True 이면 턴별 진행 상황 출력
         :return: (ValidatorResult, response_trace, turn_log)
                  response_trace : 각 턴의 직렬화된 OpenAI SDK Response 목록 (디버그용)
@@ -288,6 +298,14 @@ class ValidatorAgent:
             f"File: {source_file}  |  Page: {source_page}\n"
             f"Keywords used in retrieval: {', '.join(keywords)}"
         )
+
+        # 외부 리서치 보조 근거는 있을 때만 덧붙인다(없으면 위 user_msg가 기존과 100% 동일).
+        if research_evidence and research_evidence.strip():
+            user_msg += (
+                f"\n\n[EXTERNAL RESEARCH]\n"
+                f"(보조 근거 — 외부 웹 사실. 사내 근거가 1차, 이건 참고용)\n"
+                f"{research_evidence.strip()}"
+            )
 
         # _run_agent() 는 rag_extractor.py 에 구현된 공통 에이전트 루프 헬퍼.
         # SEARCH_HIGHLIGHT_TOOLS 를 전달해 search_vector_db 툴을 사용 가능하게 한다.
@@ -335,6 +353,7 @@ class ValidatorAgent:
 @traceable(name="Validator - run_validator")
 def run_validator(
     rag_result: RagExtractorResult,
+    research_evidence: Optional[str] = None,
     verbose: bool = True,
 ) -> Tuple[ValidatorResult, dict]:
     """
@@ -372,6 +391,7 @@ def run_validator(
             keywords=rag_result["keywords"],
             source_file=rag_result["source_file"],
             source_page=rag_result["source_page"],
+            research_evidence=research_evidence,
             verbose=verbose,
         )
 

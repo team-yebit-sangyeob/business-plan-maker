@@ -1,0 +1,6 @@
+# 개발 전용 의존성 (프로덕션 requirements.txt와 분리)
+
+# LangGraph Studio / 로컬 dev 서버 — 그래프 시각화·스텝 디버깅 전용.
+# [inmem] extra가 langgraph-api + 인메모리 런타임을 가져온다(Docker 불필요).
+# 실행: langgraph dev  (Python >=3.11 필요 → .venv 사용)
+langgraph-cli[inmem]

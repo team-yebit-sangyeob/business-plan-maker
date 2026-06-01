@@ -31,12 +31,24 @@ export async function streamChat(
     while ((idx = buf.indexOf("\n\n")) >= 0) {
       const raw = buf.slice(0, idx);
       buf = buf.slice(idx + 2);
-      const dataLine = raw
-        .split("\n")
-        .find((l) => l.startsWith("data:"));
+      const lines = raw.split("\n");
+      const dataLine = lines.find((l) => l.startsWith("data:"));
       if (!dataLine) continue;
       const payload = dataLine.slice(5).trim();
       if (!payload) continue;
+      // SSE event 필드까지 확인 — 백엔드의 `event: error` 프레임은 조용히 흘리지 않고
+      // throw해서 호출부(catch)가 사용자에게 에러를 표시하도록 한다.
+      const eventLine = lines.find((l) => l.startsWith("event:"));
+      const eventName = eventLine ? eventLine.slice(6).trim() : "message";
+      if (eventName === "error") {
+        let detail = "응답 처리 중 오류가 발생했어요.";
+        try {
+          detail = JSON.parse(payload).detail ?? detail;
+        } catch {
+          // detail 파싱 실패 시 기본 메시지 유지
+        }
+        throw new Error(detail);
+      }
       try {
         const evt = JSON.parse(payload) as ChatEvent;
         onEvent(evt);

@@ -1,9 +1,5 @@
-export type SourceLabel =
-  | "user"
-  | "research"
-  | "inference"
-  | "candidate"
-  | "empty";
+// 백엔드 SourceLabel(common/schema/labels.py)과 1:1 — user / research / empty 3종.
+export type SourceLabel = "user" | "research" | "empty";
 
 export interface Slot {
   value: string | null;
@@ -51,8 +47,6 @@ export const SLOT_TITLES: Record<SlotName, string> = {
 export const SOURCE_LABEL_KO: Record<SourceLabel, string> = {
   user: "사용자 입력",
   research: "리서치 결과",
-  inference: "추론 도출",
-  candidate: "후보 선택",
   empty: "[미정]",
 };
 
@@ -65,14 +59,20 @@ export interface SessionSnapshot {
   correction_count?: number;
 }
 
+// 워커 클러스터 — 어느 에이전트가 냈는지 (백엔드 ValidationReport.cluster와 일치).
+export type ClusterName = "research" | "rag" | "logic_validator";
+
 export type ChatEvent =
   | { type: "token"; text: string }
+  | { type: "agent_start"; cluster: ClusterName; subject: string }
   | {
       type: "validation_report";
+      cluster: ClusterName;
       subject: string;
-      findings: string[];
-      sources: string[];
-      agreement: string;
+      // 백엔드 ValidationReport는 total=False — 필드가 빠질 수 있어 옵셔널.
+      findings?: string[];
+      sources?: string[];
+      agreement?: string;
     }
   | {
       type: "slot_update";
@@ -81,8 +81,37 @@ export type ChatEvent =
       source_label: SourceLabel;
       status: Slot["status"];
     }
-  | { type: "candidates"; slot: string; options: string[] }
   | { type: "done"; next_question: string; output_request: string | null };
+
+// 채팅창에 보여줄 에이전트 활동 한 줄 — 실행 중(running)으로 떴다가 결과(done)로 해소.
+export interface AgentActivity {
+  cluster: ClusterName;
+  subject: string;
+  status: "running" | "done";
+  findings?: string[];
+  sources?: string[];
+  agreement?: string;
+}
+
+// 클러스터별 표시 라벨·뱃지 색 (채팅 활동 UI용).
+export const CLUSTER_LABEL: Record<ClusterName, string> = {
+  research: "웹 리서치",
+  rag: "회사 문서",
+  logic_validator: "논리 검증",
+};
+export const CLUSTER_BADGE: Record<ClusterName, string> = {
+  research: "bg-blue-500/15 text-blue-600 border-blue-500/30",
+  rag: "bg-amber-500/15 text-amber-700 border-amber-500/30",
+  logic_validator: "bg-purple-500/15 text-purple-600 border-purple-500/30",
+};
+
+// 일치도(agreement) 표시 라벨.
+export const AGREEMENT_KO: Record<string, string> = {
+  confirms: "근거가 뒷받침",
+  contradicts: "근거와 충돌",
+  partial: "부분 일치",
+  unknown: "판단 보류",
+};
 
 export interface PlanCard {
   plan_id: string;
@@ -99,11 +128,6 @@ export type Message =
       id: string;
       role: "agent";
       text: string;
-      validations?: Array<{
-        subject: string;
-        findings: string[];
-        sources: string[];
-        agreement: string;
-      }>;
+      activities?: AgentActivity[];
       pdf?: PlanCard;
     };

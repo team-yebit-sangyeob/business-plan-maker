@@ -2,10 +2,12 @@ import { useState, KeyboardEvent } from "react";
 
 interface Props {
   disabled?: boolean;
+  /** 응답 대기 중(스트리밍). 전송을 막고 '전송 중…' 로딩을 표시한다. */
+  busy?: boolean;
   onSend: (text: string) => void;
 }
 
-export function ChatInput({ disabled, onSend }: Props) {
+export function ChatInput({ disabled, busy, onSend }: Props) {
   const [text, setText] = useState("");
 
   const submit = () => {
@@ -31,16 +33,26 @@ export function ChatInput({ disabled, onSend }: Props) {
           onChange={(e) => setText(e.target.value)}
           onKeyDown={onKey}
           disabled={disabled}
-          placeholder="아이디어를 자연어로 적어주세요. Enter 전송, Shift+Enter 줄바꿈."
+          placeholder={
+            busy
+              ? "답변을 기다리는 중… 잠시만 기다려 주세요."
+              : "아이디어를 자연어로 적어주세요. Enter 전송, Shift+Enter 줄바꿈."
+          }
           className="flex-1 resize-none bg-background border border-input rounded-md px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-ring focus:ring-offset-1 disabled:opacity-50 placeholder:text-muted-foreground"
         />
         <button
           type="button"
           onClick={submit}
           disabled={disabled || !text.trim()}
-          className="px-4 py-2 bg-primary text-primary-foreground text-sm font-medium rounded-md hover:bg-primary/90 disabled:opacity-40 transition-colors"
+          className="px-4 py-2 bg-primary text-primary-foreground text-sm font-medium rounded-md hover:bg-primary/90 disabled:opacity-40 transition-colors inline-flex items-center gap-2"
         >
-          전송
+          {busy && (
+            <span
+              className="w-3 h-3 rounded-full border-2 border-primary-foreground/30 border-t-primary-foreground animate-spin"
+              aria-hidden="true"
+            />
+          )}
+          {busy ? "전송 중…" : "전송"}
         </button>
       </div>
     </div>
