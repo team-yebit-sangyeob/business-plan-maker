@@ -128,7 +128,8 @@ START
 ### 3.1 `segment_node` (`nodes/segment.py`)
 
 긴 발화를 **의미 단위로 분해**하고 각 조각을 **자기충족 문장(`canonical_text`)** 으로 복원.
-- 입력 프롬프트: 현재 슬롯 스냅샷 + 최근 대화 6턴 + 이번 발화.
+- 입력 프롬프트: 현재 슬롯 스냅샷 + 최근 대화 10턴 + 이번 발화.
+- **맥락 복원 강화**: 다턴에 걸친 지시어 추적(직전 턴이 아니어도 선행사 연결, 정정 후 값 우선), 확정 고유명사·수치 우선 복원("거기 시장"→"일본 시장"), 미슬롯 주체 복원. 단서 없으면 원문 유지(환각 금지).
 - LLM이 `{text, canonical_text, target_slot_hint, hints[]}` 배열 반환.
 - **`hints`로 선분류**: `correction`/`clarification`/`question`/`meta` 신호가 뚜렷한 것만 `utterance_types`에 미리 박아둠 (classify가 보존·보강).
 - 프롬프트에 `slot_guide_text()`(정의·경계)를 임베드 — `target_slot_hint`를 슬롯 *이름*이 아니라 *정의*로 고른다. 10개 화이트리스트 검증, 경계가 헷갈리면 null로 두고 슬롯 확정은 fill에 위임.
@@ -183,10 +184,10 @@ dispatch 경로에서만 실행 (그래프상 dispatch 다음). **비어있는 �
 **2단계 디스패치** (리서치·RAG 병렬 → 논리검증 후속):
 ```python
 # 1단계: 외부 사실 + 회사 문서 — 전 세그먼트 병렬
-research → run_research(subject)                       # asyncio.gather
+research → run_research(subject) → report              # asyncio.gather; report를 idx로 보관
 rag      → run_rag_check(subject) → (report, rag_result)
-# 2단계: 논리검증 — 같은 세그먼트의 1단계 RAG 산출물(RagExtractorResult)을 입력으로
-logic_validator → run_logic_validator(subject, rag_result)   # asyncio.gather
+# 2단계: 논리검증 — 같은 세그먼트의 1단계 RAG 산출물 + (claim이면) research report를 입력으로
+logic_validator → run_logic_validator(subject, rag_result, research_report)   # asyncio.gather
 ```
 > **왜 2단계인가** — `logic_validator`(validator 엔진)는 RAG가 회수한 근거(highlight·raw_source)가
 > claim을 논리적으로 지지하는지 판정하므로, 1단계 RAG 산출물 `RagExtractorResult`가 먼저 있어야
@@ -194,6 +195,11 @@ logic_validator → run_logic_validator(subject, rag_result)   # asyncio.gather
 > 넘긴다(프론트엔 ValidationReport만 발행 — raw_source 등 대용량 제외). 매트릭스상 logic_validator는
 > 항상 rag와 동반하므로 입력 근거는 늘 존재하며, RAG가 근거를 못 찾으면(`rag_result=None`) "근거
 > 없음"으로 흐른다.
+>
+> **research 보조 근거 통합**: claim 세그먼트에선 같은 세그먼트의 1단계 research 결과(findings·sources)를
+> 텍스트로 묶어 보조 근거로 함께 넘긴다. validator는 `research_evidence`(Optional[str]) 인자로 하위호환
+> 확장돼 — 인자 없으면 user_msg가 기존과 바이트 동일 — **사내 RAG 근거를 1차, 외부 research를 보조**로
+> 본다. opinion(research 라우트 없음)은 `research_report=None`으로 폴백해 기존대로 사내 근거만으로 판정.
 >
 > **역할 분담**: `rag`는 retrieval만(`agreement=unknown`), `logic_validator`는 판정만
 > (verdict→agreement: supports→confirms / contradicts→contradicts / insufficient→partial /
