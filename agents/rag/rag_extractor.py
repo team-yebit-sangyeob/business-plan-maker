@@ -20,6 +20,7 @@ from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple, TypedDict
 
 from dotenv import load_dotenv
+from langsmith import traceable
 from openai import OpenAI
 from langchain_community.vectorstores import Chroma
 from langchain_openai import OpenAIEmbeddings
@@ -29,6 +30,7 @@ load_dotenv(os.path.join(os.path.dirname(__file__), "..", "..", ".env"))
 
 # ─── 공통 설정 ─────────────────────────────────────────────────────────────────
 MODEL: str = os.getenv("OPENAI_MODEL", "gpt-5.4-mini")
+TEMPERATURE: int = 0
 client = OpenAI(api_key=os.getenv("OPENAI_API_KEY"))
 
 # agents/rag 기준 두 단계 위가 experiments 루트
@@ -47,6 +49,9 @@ MAX_AGENT_TURNS: int = int(os.getenv("MAX_AGENT_TURNS", "12"))
 
 # 검색 결과에서 제외할 최소 청크 길이 (자)
 MIN_CHUNK_LEN: int = int(os.getenv("MIN_CHUNK_LEN", "50"))
+
+# LLM 관련성 필터 활성화 여부 (환경변수로 비활성화 가능)
+ENABLE_LLM_RELEVANCE_FILTER: bool = os.getenv("ENABLE_LLM_RELEVANCE_FILTER", "true").lower() == "true"
 
 # 벡터DB 폴더 목록 (신뢰도 계층 순서)
 ALL_FOLDERS: List[str] = ["paper", "report", "proposal", "etc"]
@@ -67,6 +72,7 @@ class RagExtractorResult(TypedDict):
     source_file: str            # 출처 파일명
     source_page: str            # 출처 페이지
     raw_source: str             # 선별된 원문 청크 전체
+    total_llm_filtered: int     # 관련성 필터로 제거된 청크 수 (전체 검색 합계)
 
 
 class FallbackRequired(Exception):
@@ -94,15 +100,24 @@ def _tool_read_directory_map() -> str:
     return DIRECTORY_MAP_PATH.read_text(encoding="utf-8")
 
 
-def _tool_search_vector_db(folder: str, keyword: str, min_len: int = MIN_CHUNK_LEN) -> dict:
+def _tool_search_vector_db(
+    folder: str,
+    keyword: str,
+    claim: str = "",
+    keywords: List[str] = [],
+    min_len: int = MIN_CHUNK_LEN,
+) -> dict:
     """
     지정 폴더의 Chroma 벡터DB에서 keyword로 유사도 검색을 실행한다.
-    min_len 미만 청크는 노이즈로 간주해 자동 제외한다.
+    min_len 미만 청크는 노이즈로 간주해 자동 제외하며,
+    claim/keywords가 제공된 경우 LLM 관련성 필터를 추가로 적용한다.
 
     :param folder: 검색할 폴더명 (paper/report/proposal/etc)
     :param keyword: 검색 키워드
+    :param claim: 관련성 필터에 사용할 claim 문장 (빈 문자열이면 필터 미적용)
+    :param keywords: 관련성 필터에 사용할 키워드 목록
     :param min_len: 유효 청크의 최소 글자 수
-    :return: {folder, keyword, valid_count, skipped_count, results, error(선택)}
+    :return: {folder, keyword, valid_count, skipped_count, llm_filtered_count, results, error(선택)}
     """
     db_path = str(DOCS_BASE_PATH / folder / "chroma_db")
 
@@ -113,6 +128,7 @@ def _tool_search_vector_db(folder: str, keyword: str, min_len: int = MIN_CHUNK_L
             "keyword": keyword,
             "valid_count": 0,
             "skipped_count": 0,
+            "llm_filtered_count": 0,
             "results": [],
             "error": "db_not_found",
         }
@@ -144,13 +160,76 @@ def _tool_search_vector_db(folder: str, keyword: str, min_len: int = MIN_CHUNK_L
             "folder": folder,
         })
 
+    # LLM 관련성 필터: claim이 제공된 경우 무관한 청크를 추가 제거
+    llm_filtered_count = 0
+    if ENABLE_LLM_RELEVANCE_FILTER and claim and valid:
+        kept, dropped = _filter_irrelevant_chunks(claim, keywords or [keyword], valid)
+        llm_filtered_count = len(dropped)
+        if llm_filtered_count > 0:
+            print(f"      [guardrail] LLM 관련성 필터: {llm_filtered_count}개 제거 (folder={folder}, keyword={keyword})")
+        valid = kept
+
     return {
         "folder": folder,
         "keyword": keyword,
         "valid_count": len(valid),
         "skipped_count": skipped,
+        "llm_filtered_count": llm_filtered_count,
         "results": valid,
     }
+
+
+def _filter_irrelevant_chunks(
+    claim: str,
+    keywords: List[str],
+    chunks: List[dict],
+) -> Tuple[List[dict], List[dict]]:
+    """
+    단일 LLM 호출로 chunks 중 claim/keywords와 주제적으로 무관한 것을 제거한다.
+    파싱 실패나 API 오류 시 fail-open으로 원본 chunks를 그대로 반환한다.
+
+    :return: (kept_chunks, dropped_chunks)
+    """
+    system_prompt = (
+        "당신은 RAG 관련성 필터입니다. "
+        "주어진 claim과 keywords에 비추어 각 청크가 주제적으로 관련이 있는지 판단하세요. "
+        "청크가 claim의 근거 또는 반증으로 사용될 수 있으면 \"relevant\", "
+        "그렇지 않으면 \"irrelevant\"로 분류하세요. "
+        "반드시 아래 JSON 배열 형식으로만 출력하세요:\n"
+        "[{\"index\": 0, \"verdict\": \"relevant\", \"reason\": \"이유\"}, ...]"
+    )
+    chunk_list = [
+        {"index": i, "content": c["content"][:400]}
+        for i, c in enumerate(chunks)
+    ]
+    user_msg = (
+        f"claim: {claim}\n"
+        f"keywords: {', '.join(keywords)}\n\n"
+        f"청크 목록:\n{json.dumps(chunk_list, ensure_ascii=False)}"
+    )
+    try:
+        resp = client.responses.create(
+            model=MODEL,
+            instructions=system_prompt,
+            input=[{"role": "user", "content": user_msg}],
+            temperature=TEMPERATURE,
+        )
+        text = resp.output_text.strip()
+        if text.startswith("```"):
+            text = "\n".join(
+                line for line in text.splitlines()
+                if not line.startswith("```")
+            ).strip()
+        verdicts = json.loads(text)
+        relevant_indices = {
+            v["index"] for v in verdicts if v.get("verdict") == "relevant"
+        }
+        kept = [c for i, c in enumerate(chunks) if i in relevant_indices]
+        dropped = [c for i, c in enumerate(chunks) if i not in relevant_indices]
+        return kept, dropped
+    except Exception:
+        # API 오류나 파싱 실패 시 필터링 없이 원본 반환 (fail-open)
+        return chunks, []
 
 
 def _dispatch_tool(tool_name: str, tool_args: dict) -> str:
@@ -187,7 +266,7 @@ SEARCH_HIGHLIGHT_TOOLS = [
         "name": "search_vector_db",
         "description": (
             "지정 폴더의 Chroma DB에서 keyword로 청크를 검색합니다. "
-            f"{MIN_CHUNK_LEN}자 미만 청크는 자동 제외됩니다. "
+            f"{MIN_CHUNK_LEN}자 미만 청크는 자동 제외되며, LLM 관련성 필터도 적용됩니다. "
             "valid_count=0이거나 결과가 부족하면 다른 keyword나 folder로 재호출하세요."
         ),
         "parameters": {
@@ -202,12 +281,21 @@ SEARCH_HIGHLIGHT_TOOLS = [
                     "type": "string",
                     "description": "벡터DB에서 검색할 핵심 키워드",
                 },
+                "claim": {
+                    "type": "string",
+                    "description": "관련성 필터에 사용할 원본 claim 문장. 항상 입력 claim을 그대로 전달하세요.",
+                },
+                "keywords": {
+                    "type": "array",
+                    "items": {"type": "string"},
+                    "description": "관련성 필터에 사용할 키워드 목록. 항상 입력 keywords를 그대로 전달하세요.",
+                },
                 "min_len": {
                     "type": "integer",
                     "description": f"유효 청크 최소 글자 수 (기본값: {MIN_CHUNK_LEN})",
                 },
             },
-            "required": ["folder", "keyword"],
+            "required": ["folder", "keyword", "claim", "keywords"],
             "additionalProperties": False,
         },
     }
@@ -261,6 +349,7 @@ def _run_agent(
             "model": MODEL,
             "instructions": system,
             "input": current_input,
+            "temperature": TEMPERATURE,
         }
         if tools:
             kwargs["tools"] = tools
@@ -294,12 +383,14 @@ def _run_agent(
                 if item.name == "search_vector_db":
                     r = json.loads(result)
                     top_pcts = [c["similarity_pct"] for c in r["results"][:3]]
+                    llm_filtered = r.get("llm_filtered_count", 0)
                     if verbose:
                         pct_str = ", ".join(f"{p}%" for p in top_pcts)
-                        print(f"      valid={r['valid_count']}, skipped={r['skipped_count']}, top유사도=[{pct_str}]")
+                        print(f"      valid={r['valid_count']}, skipped={r['skipped_count']}, llm_filtered={llm_filtered}, top유사도=[{pct_str}]")
                     tool_call_entry["result_summary"] = {
                         "valid_count": r["valid_count"],
                         "skipped_count": r["skipped_count"],
+                        "llm_filtered_count": llm_filtered,
                         "top_similarity_pct": top_pcts,
                     }
                 turn_entry["tool_calls"].append(tool_call_entry)
@@ -357,6 +448,7 @@ def run_claim_extractor_agent(
         model=MODEL,
         instructions=_CLAIM_EXTRACTOR_SYSTEM,
         input=[{"role": "user", "content": f"qk:\n{qk}"}],
+        temperature=TEMPERATURE,
     )
     # 단일 호출이므로 response를 리스트로 감싸 다른 에이전트와 형식을 통일
     response_trace = [_serialize_response(response)]
@@ -449,8 +541,9 @@ _SEARCH_HIGHLIGHT_SYSTEM = f"""당신은 RAG 검색 및 하이라이트 생성 �
 
 [절차]
 1. 제공된 folders 순서대로, keywords를 활용해 search_vector_db 툴을 호출하세요
+   - search_vector_db 호출 시 반드시 현재 claim과 keywords를 그대로 함께 전달하세요 (관련성 필터에 사용됩니다)
 2. 총 {MAX_AGENT_TURNS}회 이내로 검색하세요 (폴더×키워드 조합)
-3. valid_count가 0이거나 결과가 부족하면 다른 키워드 또는 다음 폴더로 재시도하세요
+3. valid_count가 0이거나 결과가 부족하면 (관련성 필터로 제거된 경우 포함) 다른 키워드 또는 다음 폴더로 재시도하세요
 4. 수집된 모든 청크 중 claim과 가장 관련성이 높은 청크 1개를 선별하세요
 5. 선별된 청크를 근거로 100자 내외의 highlight를 작성하세요
 6. 왜 그 청크를 선택했는지 이유(highlight_reason)도 함께 작성하세요
@@ -518,6 +611,7 @@ def run_search_highlight_agent(
 
 # ─── 오케스트레이터: run_rag_extractor ─────────────────────────────────────────
 
+@traceable(name="RAG Pipeline - run_rag_extractor")
 def run_rag_extractor(
     qk: str,
     claim: Optional[str] = None,
@@ -598,6 +692,14 @@ def run_rag_extractor(
         verbose=verbose,
     )
 
+    # 전체 검색 턴에서 LLM 관련성 필터로 제거된 청크 수 합산
+    total_llm_filtered = sum(
+        tc.get("result_summary", {}).get("llm_filtered_count", 0)
+        for turn in turns_search_highlight
+        for tc in turn.get("tool_calls", [])
+        if tc.get("name") == "search_vector_db"
+    )
+
     result = RagExtractorResult(
         qk=qk,
         claim=claim,
@@ -610,6 +712,7 @@ def run_rag_extractor(
         source_file=highlight_data.get("source_file", ""),
         source_page=highlight_data.get("source_page", ""),
         raw_source=highlight_data.get("raw_source", ""),
+        total_llm_filtered=total_llm_filtered,
     )
 
     # 에이전트별 OpenAI SDK response 원본을 에이전트명으로 분류하여 반환
