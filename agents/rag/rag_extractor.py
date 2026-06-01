@@ -20,6 +20,7 @@ from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple, TypedDict
 
 from dotenv import load_dotenv
+from langsmith import traceable
 from openai import OpenAI
 from langchain_community.vectorstores import Chroma
 from langchain_openai import OpenAIEmbeddings
@@ -610,6 +611,7 @@ def run_search_highlight_agent(
 
 # ─── 오케스트레이터: run_rag_extractor ─────────────────────────────────────────
 
+@traceable(name="RAG Pipeline - run_rag_extractor")
 def run_rag_extractor(
     qk: str,
     claim: Optional[str] = None,
