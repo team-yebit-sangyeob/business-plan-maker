@@ -29,21 +29,19 @@ export function MessageList({
             </div>
           );
         }
-        // 첫 이벤트 도착 전(아직 텍스트·활동·PDF 없음) + 마지막 메시지 + 스트리밍 중이면
-        // 일반 '생각 중' 표시. agent_start/token이 오거나 스트리밍이 끝나면 자동 소멸.
-        const pending =
-          streaming &&
-          i === messages.length - 1 &&
-          !m.text &&
-          !(m.activities && m.activities.length > 0) &&
-          !m.pdf;
+        // 응답 대기 동안 '생각 중' 표시: 마지막 에이전트 메시지에 아직 답변 텍스트·PDF가
+        // 없으면 로딩을 띄운다. 워커가 '실행 중'이면 그 활동 카드(스피너)가 로딩 역할을
+        // 하므로 그때만 생략 — 초기 공백과 '활동 완료~답변 시작 전' 공백을 모두 메운다.
+        const acts = m.activities ?? [];
+        const hasRunning = acts.some((a) => a.status === "running");
+        const waitingForAnswer =
+          streaming && i === messages.length - 1 && !m.text && !m.pdf;
+        const showThinking = waitingForAnswer && !hasRunning;
         return (
           <div key={m.id} className="flex justify-start">
             <div className="max-w-[88%] w-full">
-              {pending && <ThinkingRow />}
-              {m.activities && m.activities.length > 0 && (
-                <AgentActivity items={m.activities} />
-              )}
+              {acts.length > 0 && <AgentActivity items={acts} />}
+              {showThinking && <ThinkingRow />}
               {m.text && (
                 <div className="mt-2 bg-muted text-foreground rounded-md px-3.5 py-2 text-sm whitespace-pre-wrap">
                   {m.text}

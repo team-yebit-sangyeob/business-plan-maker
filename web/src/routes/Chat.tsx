@@ -28,6 +28,8 @@ export default function Chat() {
   const [latestPdfId, setLatestPdfId] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
   const currentAgentId = useRef<string | null>(null);
+  // 스트리밍 동안 재전송 차단(이벤트 핸들러 클로저의 stale streaming 회피용 ref).
+  const streamingRef = useRef(false);
 
   useEffect(() => {
     createSession()
@@ -47,7 +49,7 @@ export default function Chat() {
 
   const send = useCallback(
     async (text: string) => {
-      if (!session) return;
+      if (!session || streamingRef.current) return;
       setError(null);
 
       const userMsg: Message = { id: makeId(), role: "user", text };
@@ -59,6 +61,7 @@ export default function Chat() {
       };
       currentAgentId.current = agentMsg.id;
       setMessages((m) => [...m, userMsg, agentMsg]);
+      streamingRef.current = true;
       setStreaming(true);
 
       const onEvent = (e: ChatEvent) => {
@@ -113,6 +116,7 @@ export default function Chat() {
       } catch (e) {
         setError(String(e));
       } finally {
+        streamingRef.current = false;
         setStreaming(false);
         refreshSession();
       }
@@ -191,7 +195,7 @@ export default function Chat() {
           streaming={streaming}
         />
 
-        <ChatInput disabled={!session || streaming} onSend={send} />
+        <ChatInput disabled={!session || streaming} busy={streaming} onSend={send} />
       </main>
     </div>
   );
