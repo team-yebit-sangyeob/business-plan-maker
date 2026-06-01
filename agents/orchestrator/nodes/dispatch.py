@@ -19,6 +19,8 @@ from common.schema import PlanState, ValidationReport, VerificationRequest
 from agents.research import run_research
 from agents.rag.stub import run_rag_check
 from agents.critic.stub import run_critic
+from agents.orchestrator.progress import emit
+from agents.orchestrator.llm import _resolve_mode
 
 
 # 실제 워커를 가진 라우트. clarify/none은 디스패치 대상이 아님.
@@ -26,6 +28,15 @@ _WORKER_ROUTES = {"research", "rag", "critic"}
 
 # 리서치 검색 recency 힌트 기본값(일). 회사 조직처럼 빠르게 변하는 항목은 추후 세분화.
 _RESEARCH_FRESHNESS_DAYS = 180
+
+# mock 연출용 단계 간 지연(초). live(실 호출)에는 적용하지 않는다 — 추가 지연 0.
+_MOCK_PACE_SECONDS = 0.12
+
+
+async def _pace(is_mock: bool) -> None:
+    """mock에서만 단계 사이 잠깐 멈춰 '실행 중 → 결과' 전환이 화면에 보이게 한다."""
+    if is_mock:
+        await asyncio.sleep(_MOCK_PACE_SECONDS)
 
 
 def _slot_context(slots: dict) -> dict:
@@ -69,27 +80,37 @@ async def parallel_dispatch_workers_node(state: PlanState) -> dict:
     if not targets:
         return {}
 
+    is_mock = _resolve_mode() == "mock"
+
     # --- 1단계: 리서치·RAG 병렬 (외부 사실 + 회사 문서) ---
+    # 호출 직전에 agent_start를 발행 → 프론트가 '실행 중'을 실제 호출과 동시에 본다.
     fact_specs: list[tuple[int, str]] = []  # (target_idx, route)
     fact_coros = []
     for idx, (subject, routes, label) in enumerate(targets):
         if "research" in routes:
             fact_specs.append((idx, "research"))
+            emit({"type": "agent_start", "cluster": "research", "subject": subject[:80]})
             fact_coros.append(
                 run_research(_verification_request(subject, label, slots, state))
             )
         if "rag" in routes:
             fact_specs.append((idx, "rag"))
+            emit({"type": "agent_start", "cluster": "rag", "subject": subject[:80]})
             fact_coros.append(run_rag_check(subject))
 
-    fact_reports = list(await asyncio.gather(*fact_coros)) if fact_coros else []
+    if fact_coros:
+        await _pace(is_mock)  # '실행 중' 카드가 잠깐 보이도록 (mock 한정)
+        fact_reports = list(await asyncio.gather(*fact_coros))
+    else:
+        fact_reports = []
 
-    # 세그먼트별로 1단계 결과를 묶어 critic 입력으로 전달할 준비.
+    # 세그먼트별로 1단계 결과를 묶어 critic 입력으로 전달할 준비 + 결과 카드 발행.
     research_by_idx: dict[int, ValidationReport] = {}
     rag_by_idx: dict[int, ValidationReport] = {}
     reports: list[ValidationReport] = []
     for (idx, route), report in zip(fact_specs, fact_reports):
         reports.append(report)
+        emit({"type": "validation_report", **report})
         if route == "research":
             research_by_idx[idx] = report
         else:
@@ -99,6 +120,7 @@ async def parallel_dispatch_workers_node(state: PlanState) -> dict:
     critic_coros = []
     for idx, (subject, routes, _label) in enumerate(targets):
         if "critic" in routes:
+            emit({"type": "agent_start", "cluster": "critic", "subject": subject[:80]})
             critic_coros.append(
                 run_critic(
                     subject,
@@ -108,7 +130,11 @@ async def parallel_dispatch_workers_node(state: PlanState) -> dict:
                 )
             )
     if critic_coros:
-        reports.extend(await asyncio.gather(*critic_coros))
+        await _pace(is_mock)  # 1단계 결과 해소 후 비평 '실행 중'이 보이도록 (mock 한정)
+        critic_reports = list(await asyncio.gather(*critic_coros))
+        for report in critic_reports:
+            emit({"type": "validation_report", **report})
+        reports.extend(critic_reports)
 
     if not reports:
         return {}
