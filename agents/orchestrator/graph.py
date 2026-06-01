@@ -3,7 +3,7 @@
   confirm_resolve → segment → classify
   (보류된 슬롯 확인 해소)
           → correction              (correction 라벨 세그먼트 처리)
-          → clarify_gate            (clarify 라우트만 있고 워커 라우트 없으면 dispatch 우회)
+          → _clarify_branch         (clarify 라우트만 있고 워커 라우트 없으면 dispatch 우회)
             ├ dispatch+fills 경로   (워커 라우트 발견 → 리서치/RAG/논리검증 호출)
             └ skip 경로             (명확화 우선)
           → gate → conversation → integrator → END
@@ -12,15 +12,16 @@
 직접 파생한다(워커 호출은 routes, 정정 처리는 utterance_types).
 
 end-to-end trace 예시 (turn 5, "카카오는 빼자. 예산은 1억으로 가자."):
-  segment      → [seg1 "카카오는 빼자"(hints=correction), seg2 "예산 1억으로 가자"]
-  classify     → seg1=["correction"](routes=none), seg2=["claim"](routes=research/rag/logic_validator)
-  correction   → target "네이버·카카오" → "네이버" (correction_log에 기록)
-  clarify_gate → clarify 라우트 없고 워커 라우트 있음 → "dispatch"
-  dispatch     → seg2 canonical을 research·rag·logic_validator 병렬 호출 → turn_validation_reports 적재
-  extract_fills→ 빈 슬롯에 "예산 1억" 채울 수 있으면 resources 등에 반영
-  gate         → "가자"는 출력요청 아님 → output_request=None
-  conversation → 다음 빈 필수/선택 슬롯 1개 질문 생성
-  integrator   → 검증 백그라운드 통지 + 그 질문을 한 문단으로 → pending_question
+  segment        → [seg1 "카카오는 빼자"(hints=correction), seg2 "예산 1억으로 가자"]
+  classify       → seg1=["correction"](routes=none), seg2=["claim"](routes=research/rag/logic_validator)
+  correction     → target "네이버·카카오" → "네이버" (correction_log에 기록)
+  _clarify_branch→ clarify 라우트 없고 워커 라우트 있음 → "dispatch"
+  dispatch       → seg2 canonical: 1단계 research·rag 병렬 → 2단계 logic_validator(1단계 RAG 산출물 입력)
+                   → turn_validation_reports 적재
+  extract_fills  → 빈 슬롯에 "예산 1억" 채울 수 있으면 resources 등에 반영
+  gate           → "가자"는 출력요청 아님 → output_request=None
+  conversation   → _build_intents(acknowledge·report_findings·ask_slot)를 자연어 한 응답으로 → pending_question
+  integrator     → pass-through: 이번 턴 pending_clarifications만 기록(LLM 없음)
 """
 from __future__ import annotations
 
