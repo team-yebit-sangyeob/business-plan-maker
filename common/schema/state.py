@@ -32,6 +32,103 @@ REQUIRED_SLOTS: tuple[str, ...] = ("problem", "target", "goal")
 OPTIONAL_SLOTS: tuple[str, ...] = tuple(s for s in ALL_SLOTS if s not in REQUIRED_SLOTS)
 
 
+# --- 슬롯 정의(단일 원천) ---------------------------------------------------
+# 슬롯 선택은 segment(target_slot_hint)·fill(extract_slot_fills)·correction 세 군데서
+# 일어난다. 정의가 갈리면 같은 내용이 다른 슬롯에 박히므로, 정의·경계를 여기 한 곳에
+# 모으고 slot_guide_text()로 렌더해 세 프롬프트가 모두 같은 문구를 임베드한다.
+# boundary = "이건 여기 NOT 저기" — 헷갈리는 이웃 슬롯과의 경계(=fill의 애매도 판정 근거).
+class SlotSpec(TypedDict):
+    title: str       # 표시 이름 — "솔루션"
+    definition: str  # 무엇이 들어가나
+    boundary: str    # 헷갈리는 이웃 슬롯과의 경계
+    question: str    # 대화에서 이 슬롯을 물을 때의 톤(질문 예시)
+
+
+SLOT_SPECS: dict[str, SlotSpec] = {
+    "problem": {
+        "title": "문제 정의",
+        "definition": "해결하려는 핵심 문제 — 누가·어떤 상황에서·무엇 때문에·어떤 손실을 보는지",
+        "boundary": "고객이 겪는 고통·손실만. 시장 규모·경쟁 데이터는 market, 그 돈 낼 사람은 target.",
+        "question": "어떤 문제예요? — 누가 · 어떤 상황에서 · 무엇 때문에 · 어떤 손실을 보는지까지 얘기해주면 좋아요.",
+    },
+    "target": {
+        "title": "타겟 / 고객",
+        "definition": "돈을 낼 사람·조직 — 회사·부서·직책·규모·접촉 경로",
+        "boundary": "'누가 사는가'만. 그들이 겪는 고통은 problem.",
+        "question": "타겟이 누구예요? — '어느 회사'가 아니라 그 안에서 계약서에 도장 찍는 사람·부서·규모·접촉 경로까지.",
+    },
+    "solution": {
+        "title": "솔루션",
+        "definition": "제공할 것의 형태 — 서비스/제품/플랫폼/툴 중 무엇을 만드는가",
+        "boundary": "'무엇을 만드나'만. 과금 방식은 revenue, 왜 더 나은지는 advantage.",
+        "question": "솔루션 형태는 어떻게 가져갈 거예요? (서비스 / 제품 / 플랫폼 중에)",
+    },
+    "market": {
+        "title": "시장 근거",
+        "definition": "시장 규모·성장 추세·경쟁사 존재 등 검증 가능한 외부 사실·데이터",
+        "boundary": "외부 '데이터'만. 그 경쟁사 대비 우리 우위는 advantage, 고객 고통은 problem.",
+        "question": "시장 규모나 경쟁사 쪽은 짚어둔 데이터 있어요? 없으면 제가 찾아볼게요.",
+    },
+    "advantage": {
+        "title": "차별점 / 경쟁우위",
+        "definition": "기존 대안·경쟁사 대비 우리가 이기는 이유·지속 우위(해자)",
+        "boundary": "'왜 우리가 이기나'만. 무엇을 만드나는 solution, 경쟁사 데이터 자체는 market, 위협은 risks.",
+        "question": "기존 대안이나 경쟁사 대비 우리만의 차별점·이기는 이유는 뭐예요?",
+    },
+    "revenue": {
+        "title": "수익 모델",
+        "definition": "어떻게 돈을 버는가 — 구독/건당/라이선싱 등 과금 방식",
+        "boundary": "과금 '방식'만. 무엇을 파나는 solution, 목표 매출 수치는 goal.",
+        "question": "수익 모델 — 구독, 건당, 라이선싱 중 어떤 쪽 그림이에요?",
+    },
+    "goal": {
+        "title": "목표 수치",
+        "definition": "목표 수치 — 언제까지 얼마, 그리고 실패 임계값(어디까지 안 되면 접나/방향 트나)",
+        "boundary": "측정 가능한 '목표 숫자+기한+실패선'만. 과금 방식 자체는 revenue.",
+        "question": "목표 수치는요? — 언제까지 얼마, 그리고 어디까지 안 되면 접거나 방향을 트는지 실패 임계값도 같이.",
+    },
+    "resources": {
+        "title": "필요 리소스",
+        "definition": "확보해야 할 역량 — 인력·예산 규모",
+        "boundary": "'무엇이 얼마나 필요한가(역량)'만. 시간순 단계·일정은 milestones.",
+        "question": "필요한 인력·예산 규모는 어떻게 보세요?",
+    },
+    "milestones": {
+        "title": "마일스톤 / 일정",
+        "definition": "시간순 단계·일정 — 언제까지 어느 단계까지",
+        "boundary": "'언제 무엇을(시간축)'만. 필요한 인력·예산 규모는 resources.",
+        "question": "마일스톤 — 언제까지 어느 단계까지 가야 한다고 보세요?",
+    },
+    "risks": {
+        "title": "리스크 / 대응",
+        "definition": "계획을 위협하는 요인과 대응",
+        "boundary": "'위협과 대응'만. 지속 우위(해자)는 advantage.",
+        "question": "걱정되는 리스크부터 하나 짚어주실래요?",
+    },
+}
+
+# ALL_SLOTS와 SLOT_SPECS가 어긋나면 곧장 터뜨린다(정의 누락·오타 방지).
+assert set(SLOT_SPECS) == set(ALL_SLOTS), "SLOT_SPECS와 ALL_SLOTS 불일치"
+
+
+def slot_title(slot: str) -> str:
+    spec = SLOT_SPECS.get(slot)
+    return spec["title"] if spec else slot
+
+
+def slot_guide_text() -> str:
+    """슬롯 정의+경계를 한 블록으로 렌더 — segment/fill/correction 프롬프트에 임베드.
+
+    질문 순서(ALL_SLOTS)대로 한 줄씩:
+      - solution (솔루션): <정의> | 경계: <경계 규칙>
+    """
+    return "\n".join(
+        f"- {name} ({SLOT_SPECS[name]['title']}): "
+        f"{SLOT_SPECS[name]['definition']} | 경계: {SLOT_SPECS[name]['boundary']}"
+        for name in ALL_SLOTS
+    )
+
+
 # 발화 유형 6종 — 매 턴 세그먼트마다 라벨링(다중 가능). 괄호는 발동 워커.
 UtteranceType = Literal[
     "clarification_needed",  # 모호/추상 → 명확화. 예: "웹툰 감수성으로 사업하고 싶어"
@@ -78,6 +175,18 @@ class Correction(TypedDict):
     turn: int             # 5
 
 
+class PendingConfirmation(TypedDict, total=False):
+    # 애매한 슬롯 주입을 사용자에게 확인받으려 보류한 한 건(턴을 넘어 영속).
+    # extract_slot_fills가 confidence='ambiguous'로 본 값을 슬롯 대신 여기 쌓고,
+    # conversation이 confirm_slot으로 묻고, 다음 턴 confirm_resolve가 해소한다.
+    value: str                  # 채우려던 값
+    proposed_slot: str          # fill이 1순위로 고른 슬롯
+    candidate_slots: list[str]  # [proposed, *alt_slots] — 사용자에게 제시할 후보
+    source_text: str            # 근거가 된 세그먼트 canonical_text(질문 문구용)
+    reason: str                 # 왜 애매한지(짧게)
+    attempts: int               # 재질문 횟수 — 2회 이상 미응답이면 proposed로 자동 확정
+
+
 class ValidationReport(TypedDict, total=False):
     # 워커 한 번의 결과. 예: 리서치가 "게임 시장 포화" 주장을 검증
     subject: str                                                       # "게임 시장이 포화 상태다"
@@ -121,6 +230,7 @@ def initial_state() -> "PlanState":
         "pending_clarifications": [],
         "pending_question": "",
         "output_request": None,
+        "pending_confirmations": [],
     }
 
 
@@ -141,3 +251,5 @@ class PlanState(TypedDict, total=False):
     pending_question: str
     # 출력 요청 분기 결과 (8장 Type 0/1/2)
     output_request: Literal["type0", "type1", "type2"] | None
+    # 애매해서 주입 보류된 확인 큐 — 한 번에 하나씩 confirm_slot으로 묻는다. 턴 넘어 영속.
+    pending_confirmations: list[PendingConfirmation]

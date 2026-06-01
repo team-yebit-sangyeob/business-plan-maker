@@ -75,4 +75,5 @@ async def gate_node(state: PlanState) -> dict:
     else:
         decision = "type2"               # 예: P·T·G만 ✓ + "여기까지" → 나머지 [미정]로 조기 출력
 
-    return {"output_request": decision}
+    # 출력을 요청했으면 보류 중인 슬롯 확인은 흘려보낸다(사용자가 진행을 택함).
+    return {"output_request": decision, "pending_confirmations": []}

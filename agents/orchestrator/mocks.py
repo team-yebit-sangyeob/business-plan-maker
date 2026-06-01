@@ -138,16 +138,51 @@ def _correction(system: str, user: str) -> dict:
     return {"actions": []}
 
 
+# 데모용 애매 케이스 — 경계 키워드면 confidence=ambiguous로 내보내 확인 흐름을 시연.
+_AMBIG_DEMO = [
+    ("검수", "solution", ["advantage"], "솔루션 형태이자 차별점으로 읽힘"),
+    ("구독", "revenue", ["solution"], "수익 방식이자 솔루션 형태로 읽힘"),
+]
+
+
 def _slot_fill(system: str, user: str) -> dict:
     empty_block = _section(user, "비어있는 슬롯")
     empty_slots = [s.strip() for s in empty_block.replace("\n", ",").split(",") if s.strip()]
     segs = _numbered_lines(_section(user, "세그먼트"))
     if not empty_slots or not segs:
         return {"fills": []}
-    first = re.sub(r"^\([^)]*\)\s*", "", segs[0]).strip()  # "(labels) text" → text
+    # "(labels) [힌트:슬롯] text" → text (앞쪽 (...)·[...] 접두를 모두 제거)
+    first = re.sub(r"^((\([^)]*\)|\[[^\]]*\])\s*)+", "", segs[0]).strip()
     if not first:
         return {"fills": []}
+    for kw, slot, alts, reason in _AMBIG_DEMO:
+        if kw in first:
+            return {
+                "fills": [
+                    {
+                        "slot": slot,
+                        "value": first,
+                        "confidence": "ambiguous",
+                        "alt_slots": alts,
+                        "reason": reason,
+                    }
+                ]
+            }
     return {"fills": [{"slot": empty_slots[0], "value": first}]}
+
+
+def _confirm_resolve(system: str, user: str) -> dict:
+    """확인 해소 데모 — 발화에 후보 슬롯(키/제목)이 있으면 pick, 정정 키워드면 reject."""
+    utterance = _section(user, "이번 사용자 발화") or ""
+    pairs = re.findall(r"([a-z_]+)\(([^)]+)\)", _section(user, "후보"))
+    if any(k in utterance for k in _CORRECTION_KW):
+        return {"decision": "reject", "slot": None}
+    for slot, title in pairs:
+        if slot in utterance or title in utterance:
+            return {"decision": "pick", "slot": slot}
+    if any(k in utterance for k in ("응", "맞아", "그래", "그걸로", "네", "좋아")):
+        return {"decision": "pick", "slot": pairs[0][0] if pairs else None}
+    return {"decision": "unclear", "slot": None}
 
 
 def _intent(system: str, user: str) -> dict:
@@ -242,8 +277,14 @@ def _render_intent(intent: dict) -> str:
         if intent.get("output_type") == "type2":
             return "필수는 다 찼으니 지금도 뽑을 수 있어요(빈 항목은 [미정]으로 들어가요)."
         return "필요한 항목이 다 찼어요. '계획서 생성'으로 뽑아볼까요?"
+    if t == "confirm_slot":
+        cands = " / ".join(c.get("title", "") for c in (intent.get("candidates") or []))
+        val = intent.get("value") or "그 내용"
+        return f"방금 '{val}' 말씀하신 거, {cands or '어느 슬롯'} 중 어디에 넣을까요?"
     if t == "ask_slot":
-        return _SLOT_Q.get(intent.get("slot", ""), "다음으로 어떤 항목을 채워볼까요?")
+        return intent.get("example") or _SLOT_Q.get(
+            intent.get("slot", ""), "다음으로 어떤 항목을 채워볼까요?"
+        )
     return ""
 
 
@@ -263,6 +304,7 @@ DEFAULT_MOCK_HANDLERS: dict[str, Callable[[str, str], dict]] = {
     "오케스트레이터 다중라벨 분류": _classify,
     "오케스트레이터 정정 해소": _correction,
     "오케스트레이터 슬롯 채움": _slot_fill,
+    "오케스트레이터 확인 해소": _confirm_resolve,
     "오케스트레이터 출력 의도 판정": _intent,
     "대화 에이전트": _conversation,
     "RAG 시뮬레이션": _rag,

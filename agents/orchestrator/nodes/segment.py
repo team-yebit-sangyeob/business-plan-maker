@@ -25,18 +25,21 @@ from typing import Optional
 from pydantic import BaseModel, Field
 
 from common.schema import PlanState, Segment
-from common.schema.state import ALL_SLOTS
+from common.schema.state import ALL_SLOTS, slot_guide_text
 from agents.orchestrator.llm import call_json
 
 
-_SYSTEM = """오케스트레이터 세그멘테이션
+_SYSTEM = (
+    """오케스트레이터 세그멘테이션
 너는 사업 계획 대화의 분해기다. 사용자 한 턴 발화를 의미 단위로 쪼개되, 각 조각은 앞뒤 맥락이 사라져도 단독으로 검색 쿼리·검증 주장으로 쓸 수 있어야 한다.
 
 규칙:
 1. text: 원문에서 잘라낸 그대로의 조각.
 2. canonical_text: 앞 턴의 주체·대상·전제를 복원한 자기충족 한국어 한 문장. 대명사/지시어/생략된 주어를 모두 채워 넣는다.
-3. target_slot_hint: 아래 10개 슬롯 중 하나 또는 null.
-   problem, target, solution, market, advantage, revenue, goal, resources, milestones, risks
+3. target_slot_hint: 아래 슬롯 중 하나 또는 null. 각 슬롯의 정의·경계를 따른다(경계가 헷갈리면 억지로 고르지 말고 null로 두면 fill이 정한다).
+"""
+    + slot_guide_text()
+    + """
 4. hints: 다음 중 해당하는 것만 배열로 — "correction"(아니/말고/빼자/사실은 등), "meta"(다음/그만/뽑아 등), "clarification"(모호/추상), "question"(사용자가 물어봄).
 
 맥락 복원 핵심: [현재 슬롯]·[최근 대화]를 근거로 대명사·지시어("그거","거기","그쪽")·생략된 주어/대상을 모두 채운다. 한 발화에 여러 의미 단위가 있으면 쪼개고, 단일하면 1개만 낸다.
@@ -56,6 +59,7 @@ _SYSTEM = """오케스트레이터 세그멘테이션
   1. text="신사업이라기엔 좀 막연하네"  canonical_text="'웹툰 IP 신사업'이라는 방향이 아직 막연하다"  target_slot_hint=null  hints=["clarification"]
 
 JSON만 출력. 다른 텍스트 금지."""
+)
 
 
 class SegmentItem(BaseModel):

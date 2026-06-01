@@ -5,6 +5,7 @@ state에서 결정론으로 뽑고(_build_intents), 그 intent 목록을 LLM 1�
 
 지원 intent(conversation_spec TRIGGER MATRIX 전체):
   ask_slot         — 비어있는 슬롯 질문(기본 질문 순서 = ALL_SLOTS 첫 빈칸)
+  confirm_slot     — 애매해서 보류된 주입을 어느 슬롯에 넣을지 확인(있으면 ask_slot 보류)
   clarify          — 모호한 발화 좁히기(있으면 다음 슬롯 질문은 보류)
   report_findings  — 리서치(외부)·RAG(내부)·비평(추론·정합성) 결과 전달 + 전제 교정
   answer_question  — 사용자 질문에 리서치·RAG가 찾은 답 전달(질문은 비평 미경유)
@@ -23,24 +24,12 @@ import json
 from pydantic import BaseModel
 
 from common.schema import PlanState
-from common.schema.state import ALL_SLOTS
+from common.schema.state import ALL_SLOTS, SLOT_SPECS, slot_title
 from agents.orchestrator.llm import call_json
 from agents.orchestrator.nodes.gate import required_missing, optional_missing
 
 
-# 질문 순서(ALL_SLOTS)대로 — 슬롯별 톤 예시
-_FEW_SHOT = {
-    "problem": "어떤 문제예요? — 누가 · 어떤 상황에서 · 무엇 때문에 · 어떤 손실을 보는지까지 얘기해주면 좋아요.",
-    "target": "타겟이 누구예요? — '어느 회사'가 아니라 그 안에서 계약서에 도장 찍는 사람·부서·규모·접촉 경로까지.",
-    "solution": "솔루션 형태는 어떻게 가져갈 거예요? (서비스 / 제품 / 플랫폼 중에)",
-    "market": "시장 규모나 경쟁사 쪽은 짚어둔 데이터 있어요? 없으면 제가 찾아볼게요.",
-    "advantage": "기존 대안이나 경쟁사 대비 우리만의 차별점·이기는 이유는 뭐예요?",
-    "revenue": "수익 모델 — 구독, 건당, 라이선싱 중 어떤 쪽 그림이에요?",
-    "goal": "목표 수치는요? — 언제까지 얼마, 그리고 어디까지 안 되면 접거나 방향을 트는지 실패 임계값도 같이.",
-    "resources": "필요한 인력·예산 규모는 어떻게 보세요?",
-    "milestones": "마일스톤 — 언제까지 어느 단계까지 가야 한다고 보세요?",
-    "risks": "걱정되는 리스크부터 하나 짚어주실래요?",
-}
+# 슬롯별 질문 톤은 SLOT_SPECS[...]["question"](단일 원천)에서 가져온다.
 
 
 _SYSTEM = """대화 에이전트
@@ -57,6 +46,7 @@ _SYSTEM = """대화 에이전트
   - redirect: 스코프 밖 발화를 부드럽게 넘기고 본론으로 잇는다.
   - reject_output: 필수 슬롯 미달이라 지금은 출력이 이르다고 알리고, 무엇을 채우면 되는지 안내.
   - deliver_plan: 계획서를 뽑을 수 있음을 안내(type2면 빈 항목은 [미정]으로 들어간다고).
+  - confirm_slot: 방금 사용자가 말한 값이 어느 슬롯인지 애매할 때, 그 값과 후보 슬롯들을 제시하고 "어디에 넣을까요?"를 한 문장으로 묻는다. 사용자가 답하기 전엔 다음 슬롯 질문(ask_slot)은 하지 않는다.
   - ask_slot: 다음 채울 슬롯을 맥락 있게 한 문장으로 묻는다(참고 예시 톤 활용).
 
 반드시 {"message": "..."} JSON만 출력."""
@@ -96,6 +86,22 @@ def _build_intents(state: PlanState) -> list[dict]:
                     "new": c.get("new"),
                 }
             )
+
+    # 1.5) confirm_slot — 애매해서 보류된 주입(있으면 다음 슬롯 질문은 보류)
+    pending = state.get("pending_confirmations") or []
+    pending_item = pending[0] if pending else None
+    if pending_item:
+        intents.append(
+            {
+                "type": "confirm_slot",
+                "value": pending_item.get("value", ""),
+                "candidates": [
+                    {"slot": c, "title": slot_title(c)}
+                    for c in (pending_item.get("candidate_slots") or [])
+                ],
+                "reason": pending_item.get("reason", ""),
+            }
+        )
 
     # 2) redirect — 스코프 밖 발화
     off_topic = next(
@@ -188,13 +194,17 @@ def _build_intents(state: PlanState) -> list[dict]:
             intents.append({"type": "clarify", "text": text})
         suppress_ask = True
 
-    # 6) ask_slot — 위에서 막지 않았으면 다음 빈칸 1개
-    if not suppress_ask:
+    # 6) ask_slot — 위에서 막지 않았고 확인 대기도 없으면 다음 빈칸 1개
+    if not suppress_ask and not pending_item:
         if next_empty is None:
             intents.append({"type": "deliver_plan", "output_type": "ready", "empty_slots": []})
         else:
             intents.append(
-                {"type": "ask_slot", "slot": next_empty, "example": _FEW_SHOT.get(next_empty, "")}
+                {
+                    "type": "ask_slot",
+                    "slot": next_empty,
+                    "example": SLOT_SPECS.get(next_empty, {}).get("question", ""),
+                }
             )
 
     return intents

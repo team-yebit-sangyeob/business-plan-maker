@@ -1,6 +1,7 @@
 """LangGraph 구성 (Fig.0 우선순위 토폴로지, spec v0.7.5):
 
-  segment → classify
+  confirm_resolve → segment → classify
+  (보류된 슬롯 확인 해소)
           → correction              (correction 라벨 세그먼트 처리)
           → clarify_gate            (clarify 라우트만 있고 워커 라우트 없으면 dispatch 우회)
             ├ dispatch+fills 경로   (워커 라우트 발견 → 리서치/RAG/비평 호출)
@@ -35,6 +36,7 @@ from agents.orchestrator.nodes.correction import (
     correction_node,
     extract_slot_fills_node,
 )
+from agents.orchestrator.nodes.confirm import confirm_resolve_node
 from agents.orchestrator.nodes.dispatch import parallel_dispatch_workers_node
 from agents.orchestrator.nodes.gate import gate_node
 from agents.orchestrator.nodes.integrator import response_integrator_node
@@ -61,6 +63,7 @@ def _clarify_branch(state: PlanState) -> Literal["dispatch", "gate"]:
 @lru_cache(maxsize=1)
 def build_graph():
     g: StateGraph = StateGraph(PlanState)
+    g.add_node("confirm_resolve", confirm_resolve_node)
     g.add_node("segment", segment_node)
     g.add_node("classify", classify_node)
     g.add_node("correction", correction_node)
@@ -70,7 +73,8 @@ def build_graph():
     g.add_node("conversation", conversation_node)
     g.add_node("integrator", response_integrator_node)
 
-    g.add_edge(START, "segment")
+    g.add_edge(START, "confirm_resolve")
+    g.add_edge("confirm_resolve", "segment")
     g.add_edge("segment", "classify")
     g.add_edge("classify", "correction")
     g.add_conditional_edges(
