@@ -4,8 +4,8 @@
 Exa로 갈아끼우려면 `_exa_search`만 구현하고 env를 바꾸면 끝 — searcher/reporter는
 `web_search`의 반환 타입(SearchHit)만 보므로 상위 코드는 손대지 않는다.
 
-키가 없거나 BPM_LLM_MODE=mock 이면 결정적 mock hit을 돌려준다 — 키 없이도
-오케스트레이터 그래프가 끝까지 돌도록(orchestrator/llm.py 의 mock 철학과 동일).
+TAVILY_API_KEY가 없으면 명확한 에러를 던진다 — 상위 run_research가 잡아 폴백 처리한다
+(키리스/mock 경로 없음).
 """
 from __future__ import annotations
 
@@ -33,20 +33,6 @@ def _freshness_to_time_range(freshness_days: int | None) -> str | None:
     if freshness_days <= 45:
         return "month"
     return "year"
-
-
-def _is_mock() -> bool:
-    return os.environ.get("BPM_LLM_MODE", "").strip().lower() == "mock"
-
-
-def _mock_hits(query: str, max_results: int) -> list[SearchHit]:
-    hit: SearchHit = {
-        "title": f"[mock] {query[:40]} 관련 자료",
-        "url": "https://example.com/mock",
-        "content": f"[mock] '{query}' 외부 검색이 비활성화돼 있습니다 (검색 키 없음 또는 mock 모드).",
-        "score": 0.0,
-    }
-    return [hit][:max_results]
 
 
 def _tavily_search(
@@ -93,12 +79,11 @@ def web_search(
     """
     provider = os.environ.get("RESEARCH_SEARCH_PROVIDER", "tavily").strip().lower()
 
-    if _is_mock():
-        return _mock_hits(query, max_results)
-
     if provider == "tavily":
         if not os.environ.get("TAVILY_API_KEY"):
-            return _mock_hits(query, max_results)
+            raise RuntimeError(
+                "TAVILY_API_KEY가 없습니다 — 리서치 웹 검색을 실행할 수 없습니다."
+            )
         return _tavily_search(query, max_results, freshness_days, topic)
 
     if provider == "exa":

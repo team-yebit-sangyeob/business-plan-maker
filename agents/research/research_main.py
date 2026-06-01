@@ -4,7 +4,8 @@
 
 dispatch가 research·rag를 asyncio.gather로 병렬 호출하므로, 동기인 OpenAI/Tavily
 호출은 asyncio.to_thread로 감싸 이벤트 루프를 막지 않는다(병렬성 보존).
-키가 없거나 mock이거나 파이프라인이 실패하면 stub 응답으로 폴백 — 그래프는 안 죽는다.
+파이프라인이 실패하면 stub 응답으로 폴백 — 그래프는 안 죽는다(복원력). 키가 없으면 상위
+(call_json·서버 기동)에서 실행 자체가 막히므로 여기엔 키리스/mock 분기가 없다.
 """
 from __future__ import annotations
 
@@ -26,13 +27,6 @@ logger = logging.getLogger(__name__)
 MODEL = os.getenv("OPENAI_MODEL", "gpt-5.4-mini")
 
 _DEFAULT_FRESHNESS_DAYS = 180
-
-
-def _should_stub() -> bool:
-    """키 없음 또는 mock 모드면 실 파이프라인을 돌리지 않는다."""
-    if os.environ.get("BPM_LLM_MODE", "").strip().lower() == "mock":
-        return True
-    return not os.environ.get("OPENAI_API_KEY")
 
 
 def _make_client() -> Any:
@@ -78,9 +72,6 @@ async def run_research(req: VerificationRequest | str) -> ValidationReport:
     """외부 사실 검증 → ValidationReport(cluster="research")."""
     req = _normalize(req)
     claim = (req.get("claim") or "").strip()
-
-    if _should_stub():
-        return stub_report(claim)
 
     try:
         client = _make_client()

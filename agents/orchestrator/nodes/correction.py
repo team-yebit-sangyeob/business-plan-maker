@@ -162,7 +162,7 @@ JSON만 출력."""
 class FillItem(BaseModel):
     slot: str
     value: str
-    confidence: Literal["clear", "ambiguous"] = "clear"  # 기본 clear (하위호환·mock)
+    confidence: Literal["clear", "ambiguous"] = "clear"  # 기본 clear (하위호환)
     alt_slots: list[str] = Field(default_factory=list)   # ambiguous일 때 다른 후보
     reason: str = ""                                     # 왜 애매한지(확인 질문 문구용)
 

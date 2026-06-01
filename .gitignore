@@ -60,6 +60,8 @@ logs/
 # documents/ 아래의 원본/산출물은 전부 git에서 제외
 infra/vector_db/documents/**
 !infra/vector_db/documents/.gitkeep
+# 루트에 추가된 로컬 벡터DB 데이터(이름 변경본 vector_db_store/) — 전체 제외
+/vector_db_store/
 
 # 디버깅용 실행파일
 agents/rag/rag_main.py
