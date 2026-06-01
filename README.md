@@ -116,7 +116,38 @@ BPM_LLM_MODE=mock python -c "from agents.orchestrator.graph import build_graph; 
 
 ---
 
-## 5. 디렉토리 한눈에
+## 5. 그래프 시각화·디버깅 (LangGraph Studio · 선택)
+
+오케스트레이터 그래프를 브라우저에서 시각화하고 노드 단위로 스텝 디버깅한다.
+앱 코드 변경 없이 dev 서버만 띄우면 된다 (`langgraph.json`이 그래프를 연결).
+
+```bash
+source .venv/bin/activate            # Python 3.11+ 필요 (.venv)
+pip install -r requirements-dev.txt  # langgraph-cli[inmem] — 최초 1회
+langgraph dev                        # 프로젝트 루트에서
+```
+
+→ `http://127.0.0.1:2024` 기동 + Studio가 브라우저로 자동 오픈:
+`https://smith.langchain.com/studio/?baseUrl=http://127.0.0.1:2024`
+
+Studio에서 `orchestrator` 그래프를 선택하면 토폴로지
+(`segment → classify → correction →[조건분기]→ dispatch/gate → … → END`)가 보이고,
+노드를 클릭해 입·출력 state를 단계별로 확인할 수 있다. 새 스레드에 아래 입력을 넣어 한 턴을 실행한다:
+
+```json
+{ "user_input": "수학 학원용 출석 앱 만들래", "turn": 1, "slots": {}, "messages": [],
+  "turn_segments": [], "turn_validation_reports": [], "pending_clarifications": [] }
+```
+
+> **참고**
+> - `BPM_LLM_MODE=mock`이면 OpenAI 호출 없이 그래프를 스텝 실행할 수 있다(오프라인 디버깅).
+> - live 모드에서 `BlockingError`가 나면 `langgraph dev --allow-blocking`으로 실행한다.
+> - Studio는 컴파일된 그래프를 직접 실행하므로 `run_turn`의 턴 전처리(turn 증가·메시지 적재·
+>   턴-로컬 리셋)는 적용되지 않는다 — 단일 턴 노드 디버깅용.
+
+---
+
+## 6. 디렉토리 한눈에
 
 ```
 /agents          오케스트레이터 + 워커 (conversation·research·rag·critic·planner)

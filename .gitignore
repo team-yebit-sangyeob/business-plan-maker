@@ -28,6 +28,9 @@ ENV/
 dist/
 build/
 
+# LangGraph Studio / dev 서버 인메모리 캐시
+.langgraph_api/
+
 # Node
 node_modules/
 npm-debug.log*
