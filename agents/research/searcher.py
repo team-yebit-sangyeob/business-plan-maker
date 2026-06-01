@@ -10,7 +10,7 @@ from __future__ import annotations
 import json
 from typing import Any, TypedDict
 
-from agents.research._util import parse_json_block
+from agents.research._util import parse_json_block, today_iso, traceable
 from agents.research.provider import web_search
 
 
@@ -50,10 +50,11 @@ _SEARCHER_SYSTEM = f"""당신은 웹 사실 검증 검색 에이전트입니다.
 [절차]
 1. 각 sub-query로 web_search를 호출하세요.
 2. score가 낮거나(0.5 미만) 결과가 주제와 안 맞으면 쿼리를 재작성해 다시 검색하세요.
-3. 총 {MAX_SEARCH_TURNS}회 이내로 검색하세요. 쓸 만한 근거가 모이면 멈추세요.
-4. 수집한 근거를 관련도 높은 순으로 최대 6개까지 아래 JSON으로 출력하세요.
+3. 시점이 중요한 주제(시장 규모·트렌드·통계 등)는 입력의 '오늘 날짜'를 기준으로 최신 자료를 우선하세요. 관련도가 비슷하면 더 최근(연·월이 빠른) 자료를 고르고, 옛 연도 자료는 후순위로 미루세요.
+4. 총 {MAX_SEARCH_TURNS}회 이내로 검색하세요. 쓸 만한 근거가 모이면 멈추세요.
+5. 수집한 근거를 관련도 높은 순으로 최대 6개까지 아래 JSON으로 출력하세요.
 
-검색 결과의 content를 통째로 길게 붙이지 말고, 주장과 직접 관련된 부분만 한 줄로 추리세요.
+검색 결과의 content를 통째로 길게 붙이지 말고, 주장과 직접 관련된 부분만 한 줄로 추리세요. 가능하면 근거의 시점(연·월)을 snippet에 드러내세요.
 
 [최종 출력 — 반드시 JSON]
 {{"evidence": [{{"snippet": "근거 한 줄 요약/인용", "url": "출처 URL", "title": "출처 제목", "score": 0.0}}]}}"""
@@ -68,6 +69,7 @@ def _norm_evidence(e: dict[str, Any]) -> Evidence:
     }
 
 
+@traceable(name="research.gather_evidence", run_type="chain")
 def gather_evidence(
     client: Any,
     subqueries: list[str],
@@ -80,7 +82,10 @@ def gather_evidence(
     if not subqueries:
         return []
 
-    user = "sub-queries:\n" + "\n".join(f"- {q}" for q in subqueries)
+    user = (
+        f"오늘 날짜: {today_iso()}\n"
+        "sub-queries:\n" + "\n".join(f"- {q}" for q in subqueries)
+    )
     previous_response_id: str | None = None
     current_input: list[dict[str, Any]] = [{"role": "user", "content": user}]
 

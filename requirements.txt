@@ -20,3 +20,8 @@ python-dotenv>=1.0
 # --- Research cluster (A) — web fact verification ---
 openai>=1.40
 tavily-python>=0.5
+
+# --- Observability — LangSmith 트레이싱 ---
+# wrap_openai/@traceable로 리서치 LLM·검색 호출을 LangSmith에 기록.
+# langgraph의 전이 의존성이지만 직접 import하므로 명시한다.
+langsmith>=0.1

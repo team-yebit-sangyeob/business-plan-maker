@@ -18,6 +18,7 @@ from agents.research.stub import stub_report
 from agents.research.decomposer import decompose
 from agents.research.searcher import gather_evidence
 from agents.research.reporter import write_report
+from agents.research._util import traceable
 
 
 logger = logging.getLogger(__name__)
@@ -35,9 +36,16 @@ def _should_stub() -> bool:
 
 
 def _make_client() -> Any:
+    """OpenAI 클라이언트. LangSmith가 있으면 wrap_openai로 감싸 호출을 트레이스에 남긴다."""
     from openai import OpenAI
 
-    return OpenAI(api_key=os.getenv("OPENAI_API_KEY"))
+    client = OpenAI(api_key=os.getenv("OPENAI_API_KEY"))
+    try:
+        from langsmith.wrappers import wrap_openai
+
+        return wrap_openai(client)
+    except Exception:  # langsmith 미설치/래핑 실패 — 트레이싱만 포기, 파이프라인은 계속.
+        return client
 
 
 def _normalize(req: VerificationRequest | str) -> VerificationRequest:
@@ -65,6 +73,7 @@ def _run_pipeline(client: Any, req: VerificationRequest, claim: str) -> dict[str
     return write_report(client, claim, evidence, model=MODEL)
 
 
+@traceable(name="research", run_type="chain")
 async def run_research(req: VerificationRequest | str) -> ValidationReport:
     """외부 사실 검증 → ValidationReport(cluster="research")."""
     req = _normalize(req)

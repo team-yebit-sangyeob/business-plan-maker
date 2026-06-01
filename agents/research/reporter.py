@@ -8,7 +8,7 @@ from __future__ import annotations
 import json
 from typing import Any
 
-from agents.research._util import parse_json_block
+from agents.research._util import parse_json_block, traceable
 from agents.research.searcher import Evidence
 
 
@@ -33,6 +33,7 @@ _REPORTER_SYSTEM = """당신은 사실 검증 리포터입니다.
 {"findings": ["..."], "sources": ["..."], "agreement": "confirms|contradicts|partial|unknown"}"""
 
 
+@traceable(name="research.write_report", run_type="chain")
 def write_report(
     client: Any, claim: str, evidence: list[Evidence], *, model: str
 ) -> dict[str, Any]:

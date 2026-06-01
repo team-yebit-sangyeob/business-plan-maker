@@ -12,6 +12,8 @@ from __future__ import annotations
 import os
 from typing import Any, TypedDict
 
+from agents.research._util import traceable
+
 
 class SearchHit(TypedDict):
     title: str
@@ -77,6 +79,7 @@ def _tavily_search(
     return hits
 
 
+@traceable(name="research.web_search", run_type="tool")
 def web_search(
     query: str,
     *,
