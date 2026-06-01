@@ -59,6 +59,6 @@ infra/vector_db/documents/**
 !infra/vector_db/documents/.gitkeep
 
 # 디버깅용 실행파일
-agent/rag/rag_main.py
-agent/validator/run_rag_val.py
-agent/validator/run_val.py
+agents/rag/rag_main.py
+agents/validator/run_rag_val.py
+agents/validator/run_val.py
