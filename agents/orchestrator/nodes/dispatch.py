@@ -96,15 +96,18 @@ async def parallel_dispatch_workers_node(state: PlanState) -> dict:
 
     # 1단계 결과 적재 + 결과 카드 발행. RAG는 (report, rag_result) 튜플 → rag_result는
     # 2단계 logic_validator 입력으로만 쓰고 프론트엔 안 보낸다(raw_source 등 대용량 제외).
+    # research report도 idx로 보관해 2단계 logic_validator에 보조 근거로 넘긴다(claim 라우트일 때만).
     rag_result_by_idx: dict[int, "RagExtractorResult"] = {}
+    research_report_by_idx: dict[int, ValidationReport] = {}
     reports: list[ValidationReport] = []
     for (idx, route), res in zip(fact_specs, fact_results):
         if route == "rag":
             report, rag_result = res
             if rag_result is not None:
                 rag_result_by_idx[idx] = rag_result
-        else:
+        else:  # route == "research"
             report = res
+            research_report_by_idx[idx] = report
         reports.append(report)
         emit({"type": "validation_report", **report})
 
@@ -113,7 +116,13 @@ async def parallel_dispatch_workers_node(state: PlanState) -> dict:
     for idx, (subject, routes, _label) in enumerate(targets):
         if "logic_validator" in routes:
             emit({"type": "agent_start", "cluster": "logic_validator", "subject": subject[:80]})
-            lv_coros.append(run_logic_validator(subject, rag_result_by_idx.get(idx)))
+            lv_coros.append(
+                run_logic_validator(
+                    subject,
+                    rag_result_by_idx.get(idx),
+                    research_report_by_idx.get(idx),
+                )
+            )
     if lv_coros:
         lv_reports = list(await asyncio.gather(*lv_coros))
         for report in lv_reports:
