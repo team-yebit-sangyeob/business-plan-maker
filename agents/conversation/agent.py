@@ -7,8 +7,8 @@ state에서 결정론으로 뽑고(_build_intents), 그 intent 목록을 LLM 1�
   ask_slot         — 비어있는 슬롯 질문(기본 질문 순서 = ALL_SLOTS 첫 빈칸)
   confirm_slot     — 애매해서 보류된 주입을 어느 슬롯에 넣을지 확인(있으면 ask_slot 보류)
   clarify          — 모호한 발화 좁히기(있으면 다음 슬롯 질문은 보류)
-  report_findings  — 리서치(외부)·RAG(내부)·비평(추론·정합성) 결과 전달 + 전제 교정
-  answer_question  — 사용자 질문에 리서치·RAG가 찾은 답 전달(질문은 비평 미경유)
+  report_findings  — 리서치(외부)·RAG(내부)·논리검증 결과 전달 + 전제 교정
+  answer_question  — 사용자 질문에 리서치·RAG가 찾은 답 전달(질문은 논리검증 미경유)
   redirect         — 스코프 밖 발화를 부드럽게 되돌림
   reject_output    — 필수 슬롯 미달 상태의 출력 요청 거절(type0)
   acknowledge      — 정정 반영 확인
@@ -40,7 +40,7 @@ _SYSTEM = """대화 에이전트
 - 여러 intent가 오면 매끄럽게 연결한다(예: 정정 확인 → 찾은 근거 → 다음 질문).
 - intent별 표현 규칙:
   - acknowledge: 사용자의 정정/확인을 짧게 받아준다.
-  - report_findings: research=외부 사실, rag=회사 내부 자료, critic=추론·정합성 점검. 1~2문장으로 전달하고, 사용자 전제와 어긋나면 부드럽게 교정 제안.
+  - report_findings: research=외부 사실, rag=회사 내부 자료, logic_validator=claim↔근거의 논리 검증. 1~2문장으로 전달하고, 사용자 전제와 어긋나면 부드럽게 교정 제안.
   - answer_question: 사용자가 물은 것에 research·rag가 찾은 답을 전달.
   - clarify: 모호한 발화를 좁히는 질문. (이게 있으면 ask_slot은 보통 보류된다)
   - redirect: 스코프 밖 발화를 부드럽게 넘기고 본론으로 잇는다.
@@ -136,7 +136,7 @@ def _build_intents(state: PlanState) -> list[dict]:
         is_question = "question" in seg_types.get(subj, [])
         research = clusters.get("research")
         rag = clusters.get("rag")
-        critic = clusters.get("critic")
+        logic_validator = clusters.get("logic_validator")
         if is_question:
             intents.append(
                 {
@@ -150,7 +150,7 @@ def _build_intents(state: PlanState) -> list[dict]:
             agreement = min(
                 (
                     (rep or {}).get("agreement", "unknown")
-                    for rep in (research, critic, rag)
+                    for rep in (research, logic_validator, rag)
                     if rep is not None
                 ),
                 key=lambda a: _AGREEMENT_PRIORITY.get(a, 3),
@@ -162,7 +162,7 @@ def _build_intents(state: PlanState) -> list[dict]:
                     "subject": subj,
                     "research": (research or {}).get("findings", []),
                     "rag": (rag or {}).get("findings", []),
-                    "critic": (critic or {}).get("findings", []),
+                    "logic_validator": (logic_validator or {}).get("findings", []),
                     "agreement": agreement,
                 }
             )

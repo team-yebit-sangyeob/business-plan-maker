@@ -4,7 +4,7 @@
   (보류된 슬롯 확인 해소)
           → correction              (correction 라벨 세그먼트 처리)
           → clarify_gate            (clarify 라우트만 있고 워커 라우트 없으면 dispatch 우회)
-            ├ dispatch+fills 경로   (워커 라우트 발견 → 리서치/RAG/비평 호출)
+            ├ dispatch+fills 경로   (워커 라우트 발견 → 리서치/RAG/논리검증 호출)
             └ skip 경로             (명확화 우선)
           → gate → conversation → integrator → END
 
@@ -13,10 +13,10 @@
 
 end-to-end trace 예시 (turn 5, "카카오는 빼자. 예산은 1억으로 가자."):
   segment      → [seg1 "카카오는 빼자"(hints=correction), seg2 "예산 1억으로 가자"]
-  classify     → seg1=["correction"](routes=none), seg2=["claim"](routes=research/rag/critic)
+  classify     → seg1=["correction"](routes=none), seg2=["claim"](routes=research/rag/logic_validator)
   correction   → target "네이버·카카오" → "네이버" (correction_log에 기록)
   clarify_gate → clarify 라우트 없고 워커 라우트 있음 → "dispatch"
-  dispatch     → seg2 canonical을 research·rag·critic 병렬 호출 → turn_validation_reports 적재
+  dispatch     → seg2 canonical을 research·rag·logic_validator 병렬 호출 → turn_validation_reports 적재
   extract_fills→ 빈 슬롯에 "예산 1억" 채울 수 있으면 resources 등에 반영
   gate         → "가자"는 출력요청 아님 → output_request=None
   conversation → 다음 빈 필수/선택 슬롯 1개 질문 생성
@@ -43,7 +43,7 @@ from agents.orchestrator.nodes.integrator import response_integrator_node
 from agents.conversation.agent import conversation_node
 
 
-_WORKER_ROUTES = frozenset({"research", "rag", "critic"})
+_WORKER_ROUTES = frozenset({"research", "rag", "logic_validator"})
 
 
 def _clarify_branch(state: PlanState) -> Literal["dispatch", "gate"]:

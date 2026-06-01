@@ -60,7 +60,7 @@ export interface SessionSnapshot {
 }
 
 // 워커 클러스터 — 어느 에이전트가 냈는지 (백엔드 ValidationReport.cluster와 일치).
-export type ClusterName = "research" | "rag" | "critic";
+export type ClusterName = "research" | "rag" | "logic_validator";
 
 export type ChatEvent =
   | { type: "token"; text: string }
@@ -97,12 +97,12 @@ export interface AgentActivity {
 export const CLUSTER_LABEL: Record<ClusterName, string> = {
   research: "웹 리서치",
   rag: "회사 문서",
-  critic: "비평",
+  logic_validator: "논리 검증",
 };
 export const CLUSTER_BADGE: Record<ClusterName, string> = {
   research: "bg-blue-500/15 text-blue-600 border-blue-500/30",
   rag: "bg-amber-500/15 text-amber-700 border-amber-500/30",
-  critic: "bg-purple-500/15 text-purple-600 border-purple-500/30",
+  logic_validator: "bg-purple-500/15 text-purple-600 border-purple-500/30",
 };
 
 // 일치도(agreement) 표시 라벨.

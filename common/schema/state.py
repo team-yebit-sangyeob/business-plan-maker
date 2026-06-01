@@ -132,8 +132,8 @@ def slot_guide_text() -> str:
 # 발화 유형 6종 — 매 턴 세그먼트마다 라벨링(다중 가능). 괄호는 발동 워커.
 UtteranceType = Literal[
     "clarification_needed",  # 모호/추상 → 명확화. 예: "웹툰 감수성으로 사업하고 싶어"
-    "claim",                 # 검증 가능한 내용 발화(사실·가설·결정·제약) → 리서치+RAG+비평. 예: "게임 시장 포화 상태래" / "일본에서 통할 거 같아" / "타겟은 네이버로 가자" / "예산 1억, 6개월"
-    "opinion",               # 주관 선호 → RAG+비평. 예: "우리 색깔엔 B2B가 더 맞아"
+    "claim",                 # 검증 가능한 내용 발화(사실·가설·결정·제약) → 리서치+RAG+논리검증. 예: "게임 시장 포화 상태래" / "일본에서 통할 거 같아" / "타겟은 네이버로 가자" / "예산 1억, 6개월"
+    "opinion",               # 주관 선호 → RAG+논리검증. 예: "우리 색깔엔 B2B가 더 맞아"
     "correction",            # 정정·취소 → 슬롯 덮어쓰기. 예: "아 카카오는 빼자"
     "question",              # 사용자 정보 요청 → 리서치(외부)·RAG(내부). 예: "웹툰 시장 규모가 어떻게 돼?"
     "meta",                  # 단순응답·진행 신호. 예: "응 다음", "여기까지 뽑아줘"
@@ -144,7 +144,7 @@ UtteranceType = Literal[
 Route = Literal[
     "research",  # 웹 리서치 — 외부 사실 검증
     "rag",       # 회사 문서 RAG — 내부 정합성
-    "critic",    # 비평 — 추론 점검 + 정합성 판단 (구 inference)
+    "logic_validator",  # 논리 검증 — claim ↔ 사내 근거(RAG)의 논리적 지지 판정 (구 critic)
     "clarify",   # 명확화 — 워커 호출 없이 다음 턴까지 보류
     "none",      # 스킵 (meta/correction 등)
 ]
@@ -164,7 +164,7 @@ class Segment(TypedDict, total=False):
     utterance_types: list[UtteranceType] # 다중 라벨: ["claim"] (주장이면서 질문이면 ["claim","question"])
     in_scope: bool                       # 사업 계획과 관련 있는 발화인가. False면(무맥락 사실·잡담·무관 요청) classify가 routes=["none"]로 막고 integrator가 부드럽게 리다이렉트. 기본 True(애매하면 통과 — 과차단 방지).
     target_slot: str | None              # 들어갈 슬롯(있으면): "target"
-    routes: list[Route]                  # 발동 워커: ["research","rag","critic"]. 처리 우선순위·분기는 routes/utterance_types에서 직접 파생(별도 priority 필드 없음).
+    routes: list[Route]                  # 발동 워커: ["research","rag","logic_validator"]. 처리 우선순위·분기는 routes/utterance_types에서 직접 파생(별도 priority 필드 없음).
 
 
 class Correction(TypedDict):
@@ -193,7 +193,7 @@ class ValidationReport(TypedDict, total=False):
     findings: list[str]                                                # ["2024년 모바일 게임 신규 출시 -12%", ...]
     sources: list[str]                                                 # ["https://...", "업계 리포트 X"]
     agreement: Literal["confirms", "contradicts", "partial", "unknown"]# 사용자 주장과의 일치도
-    cluster: Literal["research", "rag", "critic"]                      # 어느 워커가 냈는지
+    cluster: Literal["research", "rag", "logic_validator"]             # 어느 워커가 냈는지
 
 
 class VerificationRequest(TypedDict, total=False):

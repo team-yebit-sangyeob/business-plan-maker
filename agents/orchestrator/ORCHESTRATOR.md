@@ -49,19 +49,19 @@ OPTIONAL_SLOTS = tuple(s for s in ALL_SLOTS if s not in REQUIRED_SLOTS)
 
 각 `Slot` = `{value, source_label, status}`.
 - `source_label` ∈ `SourceLabel` (`common/schema/labels.py`): `user / research / empty` (3종)
-  → **출처 라벨은 기획서 3.3 그대로 유지** (에이전트 이름은 critic으로 바뀌었지만 라벨 enum은 불변).
+  → **출처 라벨은 기획서 3.3 그대로 유지** (에이전트 이름은 logic_validator로 바뀌었지만 라벨 enum은 불변).
 - `status` ∈ `empty / needs_clarification / filled`.
 
 ### 발화 유형 6종 (`UtteranceType`)
 
 `clarification_needed · claim · opinion · correction · question · meta`
-> `claim`은 사실·가설·결정·제약을 한 유형으로 묶는다 — 라우팅이 동일(research+rag+critic)하기 때문. 주장을 어떻게 분해·검증할지는 **오케가 아니라 리서치 쿼리 분해기**가 정한다.
+> `claim`은 사실·가설·결정·제약을 한 유형으로 묶는다 — 라우팅이 동일(research+rag+logic_validator)하기 때문. 주장을 어떻게 분해·검증할지는 **오케가 아니라 리서치 쿼리 분해기**가 정한다.
 > 세그먼트마다 `in_scope`(계획 관련 여부)도 함께 매겨, false면 워커를 막고 부드럽게 리다이렉트.
 
 ### 라우트 (`Route`)
 
-`research · rag · critic · clarify · none`
-> v0.7.5에서 `inference` → **`critic`** 으로 변경. 비평(Critic)은 추론 점검 + 정합성 판단을 함께 맡는다.
+`research · rag · logic_validator · clarify · none`
+> v0.7.5에서 `inference` → `critic` → **`logic_validator`** 로 변경. claim ↔ 사내 근거(RAG)의 논리적 지지 여부를 판정한다(validator 엔진).
 
 ### Segment / ValidationReport / Correction
 
@@ -69,7 +69,7 @@ OPTIONAL_SLOTS = tuple(s for s in ALL_SLOTS if s not in REQUIRED_SLOTS)
   - 처리 순서·그래프 분기는 **별도 priority 필드 없이** `routes`/`utterance_types`에서 직접 파생한다 — 워커 호출·디스패치 분기는 `routes`(워커 라우트 유무), 정정 처리는 `utterance_types`(`"correction"` 포함 여부).
   - `in_scope`: 사업 계획과 관련 있는 발화인가. False면 classify가 `routes=["none"]`로 막고 conversation이 `redirect` intent로 부드럽게 넘긴다. 기본 True.
   - 주장을 어떻게 분해·검증할지(검증 강도, 전제 vs 결론)는 **오케가 정하지 않는다** — 리서치 클러스터의 쿼리 분해기 몫.
-- `ValidationReport`: `{subject, findings[], sources[], agreement, cluster}`, `cluster ∈ research/rag/critic`.
+- `ValidationReport`: `{subject, findings[], sources[], agreement, cluster}`, `cluster ∈ research/rag/logic_validator`.
 - `Correction`: `{slot, previous, new, turn}` — 정정 이력.
 
 ### PlanState
@@ -98,7 +98,7 @@ START
  └▶ classify       각 세그먼트 다중 라벨 + 라우팅 결정 (LLM + 결정론 덮어쓰기)
  └▶ correction     정정 신호 처리 → 슬롯 clear/replace (LLM)
  └▶ [clarify_branch]  ← 유일한 조건부 엣지
-      ├─ dispatch  research·rag 병렬 → critic 후속 (2단계, 워커 라우트 있을 때)
+      ├─ dispatch  research·rag 병렬 → logic_validator 후속 (2단계, 워커 라우트 있을 때)
       │    └▶ extract_fills   빈 슬롯에 값 추출 (LLM)
       │         └▶ gate
       └─ gate      (명확화만 있으면 dispatch 우회)
@@ -109,7 +109,7 @@ START
 ```
 
 - `build_graph()`는 `@lru_cache(maxsize=1)` — 한 번만 컴파일, 모든 턴이 공유.
-- **`_clarify_branch`**: 명확화(`clarify` 라우트)만 있고 부를 워커(research/rag/critic 라우트)가 하나도 없으면 `gate`로 직행 → 모호한 발화를 검증하지 않음 (기획서 6장 ②순위 규칙). `dispatch_node`와 같은 '워커 라우트 유무' 기준이라 부를 워커가 있으면 명확화가 섞여 있어도 dispatch로 보낸다.
+- **`_clarify_branch`**: 명확화(`clarify` 라우트)만 있고 부를 워커(research/rag/logic_validator 라우트)가 하나도 없으면 `gate`로 직행 → 모호한 발화를 검증하지 않음 (기획서 6장 ②순위 규칙). `dispatch_node`와 같은 '워커 라우트 유무' 기준이라 부를 워커가 있으면 명확화가 섞여 있어도 dispatch로 보낸다.
 - **`run_turn(state, user_input)`**: 진입점. 턴 카운터 증가 → user 메시지 적재 → 턴 임시필드 초기화 → `graph.ainvoke` → assistant 응답을 messages에 누적.
 
 ---
@@ -141,7 +141,7 @@ START
 
 **라우팅 매트릭스 (`_ROUTE_MATRIX`, 기획서 5장):**
 
-| 발화 유형 | clarify | research | rag | critic |
+| 발화 유형 | clarify | research | rag | logic_validator |
 |---|:---:|:---:|:---:|:---:|
 | clarification_needed | ● | | | |
 | claim | | ● | ● | ● |
@@ -150,10 +150,10 @@ START
 | correction | (correction_node 처리) | | | |
 | meta | (워커 호출 없음) | | | |
 
-> `claim`(사실·가설·결정·제약)은 research+rag+critic 모두 발동 — 라우팅이 같아 한 유형으로 묶는다.
+> `claim`(사실·가설·결정·제약)은 research+rag+logic_validator 모두 발동 — 라우팅이 같아 한 유형으로 묶는다.
 > 검증 세부(전제 vs 사실 vs 결정 배경)는 오케가 아니라 리서치 쿼리 분해기가 claim·slot_context를 보고 정한다.
 
-- `derive_routes`: 여러 라벨의 활성 클러스터 **합집합**, `[clarify, research, rag, critic, none]` 순서로 정렬.
+- `derive_routes`: 여러 라벨의 활성 클러스터 **합집합**, `[clarify, research, rag, logic_validator, none]` 순서로 정렬.
 - segment가 미리 박은 라벨 보존 + LLM 추가 라벨 머지(화이트리스트·중복 제거), 둘 다 없으면 `opinion` 기본값.
 - LLM 호출은 **세그먼트 전체 배치 1회** (호출 절약), 개수 어긋나면 LLM 결과 폐기.
 
@@ -176,32 +176,33 @@ dispatch 경로에서만 실행 (그래프상 dispatch 다음). **비어있는 �
 
 ### 3.5 `parallel_dispatch_workers_node` (`nodes/dispatch.py`)
 
-**워커 라우트(`research/rag/critic`)를 가진** 세그먼트를 보고 워커를 **2단계로 호출**.
-> 라우트 유무로 판단 — `opinion`(routes=`rag·critic`)도 매트릭스대로 디스패치된다.
+**워커 라우트(`research/rag/logic_validator`)를 가진** 세그먼트를 보고 워커를 **2단계로 호출**.
+> 라우트 유무로 판단 — `opinion`(routes=`rag·logic_validator`)도 매트릭스대로 디스패치된다.
 > 명확화-only 턴은 `_clarify_branch`가 dispatch 자체를 우회하므로 보류된다.
 
-**2단계 디스패치** (critic_spec §6 "리서치·RAG 병렬 → 비평 후속"):
+**2단계 디스패치** (리서치·RAG 병렬 → 논리검증 후속):
 ```python
 # 1단계: 외부 사실 + 회사 문서 — 전 세그먼트 병렬
-research → run_research(subject)            # asyncio.gather
-rag      → run_rag_check(subject)
-# 2단계: 비평 — 같은 세그먼트의 1단계 산출물을 입력으로
-critic   → run_critic(subject, slots,
-                      research_report, rag_context)   # asyncio.gather
+research → run_research(subject)                       # asyncio.gather
+rag      → run_rag_check(subject) → (report, rag_result)
+# 2단계: 논리검증 — 같은 세그먼트의 1단계 RAG 산출물(RagExtractorResult)을 입력으로
+logic_validator → run_logic_validator(subject, rag_result)   # asyncio.gather
 ```
-> **왜 2단계인가** — 비평의 정합성(consistency) 모드는 '사용자 주장 ↔ 외부 사실/회사 문서'를
-> 비교하므로 `research_report·rag_context`가 먼저 있어야 한다. 추론(reasoning) 점검은 근거 없이도
-> 가능해, research/rag 라우트가 없는 세그먼트의 critic은 두 입력이 `None`으로 돌아간다(현 매트릭스엔
-> 그런 조합 없음 — critic은 항상 rag와 동반).
+> **왜 2단계인가** — `logic_validator`(validator 엔진)는 RAG가 회수한 근거(highlight·raw_source)가
+> claim을 논리적으로 지지하는지 판정하므로, 1단계 RAG 산출물 `RagExtractorResult`가 먼저 있어야
+> 한다. RAG는 `(ValidationReport, RagExtractorResult)`를 돌려주고 dispatch가 그 원본을 2단계로
+> 넘긴다(프론트엔 ValidationReport만 발행 — raw_source 등 대용량 제외). 매트릭스상 logic_validator는
+> 항상 rag와 동반하므로 입력 근거는 늘 존재하며, RAG가 근거를 못 찾으면(`rag_result=None`) "근거
+> 없음"으로 흐른다.
 >
-> v0.7.5: "검증" 단계가 사라지고 세 갈래 워커 디스패치로 분리. **비평(Critic)은 라벨링된
-> 발화 + 슬롯 상태(read-only) + 1단계 산출물**을 받음 (기획서 11장 1주차 픽스 #3). 결과는
-> `validation_reports`에 누적 + 이번 턴분은 `turn_validation_reports`에 별도 보관.
+> **역할 분담**: `rag`는 retrieval만(`agreement=unknown`), `logic_validator`는 판정만
+> (verdict→agreement: supports→confirms / contradicts→contradicts / insufficient→partial /
+> unrelated→unknown). 결과는 `turn_validation_reports`에 적재.
 >
-> **워커 구현 상태**: `research`는 실 파이프라인(분해→검색→리포트, 키 없으면 데모 폴백).
-> `rag`·`critic`은 **단일 LLM 호출 시뮬레이션 stub** — 실 다단계(회사 KB 검색 / 추론·정합성
-> 모듈)를 `call_json` 1회로 흉내내 그럴듯한 ValidationReport를 낸다(mock 모드는 mocks.py
-> 데모 핸들러). 프론트엔드가 실제처럼 end-to-end로 돌려볼 수 있게 하기 위함.
+> **워커 구현 상태(실 구현)**: 세 워커 모두 실 파이프라인이다 — `research`(분해→검색→리포트),
+> `rag`(rag_extractor: claim추출→폴더라우팅→Chroma 검색+하이라이트), `logic_validator`(validator
+> 엔진 `run_validator`). 동기·블로킹 호출은 `asyncio.to_thread`로 감싼다. **mock 경로는 없다** —
+> `OPENAI_API_KEY`가 없으면 실행 자체가 막힌다(§4).
 
 ### 3.6 `gate_node` (`nodes/gate.py`)
 
@@ -223,7 +224,7 @@ critic   → run_critic(subject, slots,
 
 state에서 **intent 목록을 결정론으로 뽑아**(`_build_intents`) **LLM 1회로 한 응답으로 렌더** (대화 에이전트). conversation_spec TRIGGER MATRIX 전체를 지원:
 `ask_slot · confirm_slot · clarify · report_findings · answer_question · redirect · reject_output · acknowledge · deliver_plan`.
-> 구현 차이: conversation_spec은 `report_research`·`report_critique`를 별도 intent로 두지만, 코드는 한 주제의 research·rag·critic 결과를 **`report_findings` 하나로 통합**해 넘긴다(렌더 프롬프트가 출처별로 구분). spec이 "둘은 한 턴에 묶일 수 있다(통합은 integrator 몫)"고 한 것을 그대로 반영.
+> 구현 차이: conversation_spec은 `report_research`·`report_critique`를 별도 intent로 두지만, 코드는 한 주제의 research·rag·logic_validator 결과를 **`report_findings` 하나로 통합**해 넘긴다(렌더 프롬프트가 출처별로 구분). spec이 "둘은 한 턴에 묶일 수 있다(통합은 integrator 몫)"고 한 것을 그대로 반영.
 - **intent 선택(결정론)**: 이번 턴 정정→`acknowledge`, `pending_confirmations`→`confirm_slot`(보류값과 후보 슬롯 제시), `in_scope=false`→`redirect`, `turn_validation_reports`→주제별 `report_findings`(claim·opinion) 또는 `answer_question`(question), `output_request`→`reject_output`(type0)·`deliver_plan`(type1/2), `clarify` 라우트→`clarify`. 위에서 막지 않았고 **확인 대기(`confirm_slot`)도 없으면** `ALL_SLOTS` 첫 빈칸으로 `ask_slot`(confirm_slot·clarify·type0·deliver가 있으면 다음 질문 보류).
 - **렌더(LLM)**: intent 목록 JSON을 받아 한 메시지로 매끄럽게 연결(예: 결과 보고 → 다음 질문). 슬롯별 질문 톤은 `SLOT_SPECS[...]["question"]`(단일 원천)에서 가져와 `ask_slot.example`로 주입.
 - **분류·판단은 안 함** — 무엇을 보고/질문할지는 state에서 파생, 대화는 표현만.
@@ -238,10 +239,12 @@ state에서 **intent 목록을 결정론으로 뽑아**(`_build_intents`) **LLM 
 
 ## 4. LLM 호출 헬퍼 (`llm.py`)
 
-모든 LLM 노드는 `call_json(system, user, schema)` 하나만 부른다.
-- **mock 모드** (`BPM_LLM_MODE=mock` 또는 키 없음): `register_mock(key, handler)`로 등록된 가짜 응답. key = system 프롬프트 **첫 줄**.
-- **live 모드**: `langchain-openai ChatOpenAI`, JSON 모드 + 스키마 힌트 주입 + pydantic 검증, 실패 시 1회 재시도.
+모든 LLM 노드는 `call_json(system, user, schema)` 하나만 부른다. **mock/live 모드 분기는 없다** —
+`OPENAI_API_KEY`가 없으면 `call_json`이 즉시 `RuntimeError`를 던지고 `api_server`도 기동 시점에
+거부한다(fail-fast). 키가 있으면 항상 실 호출.
+- `langchain-openai ChatOpenAI`, JSON 모드 + 스키마 힌트 주입 + pydantic 검증, 실패 시 1회 재시도.
 - 3단 방어: 프롬프트에 스키마 박기 → JSON 모드 → pydantic `model_validate`.
+- 모델 교체: `BPM_LLM_MODEL`(오케스트레이터), `OPENAI_MODEL`(리서치/RAG).
 
 ---
 
@@ -273,7 +276,7 @@ state에서 **intent 목록을 결정론으로 뽑아**(`_build_intents`) **LLM 
 
 1. **상시 진입점** — 조건부가 아니라 모든 메시지가 오케스트레이터를 거친다.
 2. **판단/표현 분리** — 무엇을 물을지(오케) vs 어떻게 물을지(대화).
-3. **분류 일원화** — 6유형 라벨링은 오케 단독. 비평·워커는 라벨링된 발화를 입력으로만 받음.
+3. **분류 일원화** — 6유형 라벨링은 오케 단독. 논리검증·워커는 라벨링된 발화를 입력으로만 받음.
 4. **LLM은 제안, 코드는 결정** — 라우팅·분기·Type 판정은 결정론 함수가 최종 확정.
 5. **새로 추가된 것만 처리** — 매 턴 전체 재계산 X. 정정 이력은 별도 추적.
 6. **입력은 분해, 출력은 절제** — 세그멘테이션 + 다중 라벨 + 라우팅 / 응답은 명확화 + 핵심 질문 1~2개.
@@ -286,20 +289,22 @@ state에서 **intent 목록을 결정론으로 뽑아**(`_build_intents`) **LLM 
 ```
 agents/orchestrator/
 ├─ graph.py              토폴로지 조립 + run_turn (진입점)
-├─ llm.py                call_json (mock/live, 구조화 출력)
+├─ llm.py                call_json (키 필수, 구조화 출력)
 ├─ ORCHESTRATOR.md       (이 문서)
 └─ nodes/
    ├─ confirm.py         애매한 슬롯 주입 확인 해소 (pending 큐, START 직후)
    ├─ segment.py         세그멘테이션 + 맥락 복원
    ├─ classify.py        다중 라벨 + 라우팅 매트릭스
    ├─ correction.py      정정 해소 + 슬롯 채움 (애매하면 pending 큐로 보류)
-   ├─ dispatch.py        리서치·RAG 병렬 → 비평 2단계 호출
+   ├─ dispatch.py        리서치·RAG 병렬 → 논리검증 2단계 호출
    ├─ gate.py            출력 게이트 Type 0/1/2
    ├─ integrator.py      응답 통합 (결정론)
    └─ router.py          (deprecated)
 
 agents/conversation/agent.py   대화 에이전트 (intent 선택 + 한 응답 렌더)
 agents/research/               리서치 실 파이프라인 (분해→검색→리포트)
-agents/{rag,critic}/           단일 LLM 호출 시뮬레이션 stub
+agents/rag/                    RAG retrieval 워커 (rag_extractor + worker 어댑터)
+agents/logic_validator/        논리검증 워커 (validator 엔진 호출 어댑터)
+agents/validator/              validator 엔진 (run_validator: claim↔근거 판정)
 common/schema/{state,labels}.py  슬롯·라벨·타입 정의
 ```

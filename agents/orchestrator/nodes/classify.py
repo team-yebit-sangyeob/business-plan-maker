@@ -11,13 +11,13 @@ worked example
 입력 세그먼트 canonical_text:
     "웹툰 IP가 일본 시장에서 통할 것이다"
 LLM utterance_types →  ["claim"]
-derive_routes      →  ["research", "rag", "critic"]   # 전제는 검색, 회사 적합성은 RAG, 비약은 비평
+derive_routes      →  ["research", "rag", "logic_validator"]   # 전제는 검색, 회사 적합성은 RAG, 논리는 logic_validator
 (주장을 어떻게 분해·검증할지는 리서치 클러스터의 쿼리 분해기 몫 — 오케는 라우팅까지만)
 
 입력 세그먼트:
     "웹툰 시장 규모가 어떻게 돼? 그리고 타겟은 네이버로 가자"
 LLM utterance_types →  ["question", "claim"]           # 한 문장에 두 유형
-derive_routes      →  ["research", "rag", "critic"]    # 두 유형의 라우트 합집합
+derive_routes      →  ["research", "rag", "logic_validator"]    # 두 유형의 라우트 합집합
 """
 from __future__ import annotations
 
@@ -43,7 +43,7 @@ _SYSTEM = """오케스트레이터 다중라벨 분류
 
 구분 가이드 — 헷갈리는 경계:
 - claim vs opinion: 핵심 발화가 참/거짓을 따질 사실 주장이면 claim, 가치판단·선호면 opinion.
-  의견의 근거도 RAG·비평으로 점검되지만 근거의 검증 가능성은 분류를 가르지 않는다 — 둘의 라우팅 차이는 리서치(외부 웹) 발동 여부뿐.
+  의견의 근거도 RAG·논리검증으로 점검되지만 근거의 검증 가능성은 분류를 가르지 않는다 — 둘의 라우팅 차이는 리서치(외부 웹) 발동 여부뿐.
   · "B2B 시장이 더 커" → claim (시장 규모는 외부 사실)
   · "난 B2B가 더 끌려" → opinion (주관)
   · "B2B가 우리 색깔에 맞아, 영업 인프라도 강하니까" → opinion ('우리 색깔'은 가치판단 — 근거('영업 인프라 강함')는 RAG가 따지지만 라벨은 opinion)
@@ -88,8 +88,8 @@ class ClassifyOut(BaseModel):
 # ● = 항상, △ = 검증 가능 정보면 (간단화: 일단 항상 호출), — = 스킵
 _ROUTE_MATRIX: dict[str, set[Route]] = {
     "clarification_needed": {"clarify"},
-    "claim": {"research", "rag", "critic"},  # 사실·가설·결정·제약 통합 — 전제는 리서치, 회사 적합성은 RAG, 비약은 비평
-    "opinion": {"rag", "critic"},
+    "claim": {"research", "rag", "logic_validator"},  # 사실·가설·결정·제약 통합 — 전제는 리서치, 회사 적합성은 RAG, 논리는 logic_validator
+    "opinion": {"rag", "logic_validator"},
     "question": {"research", "rag"},  # 외부 사실이면 리서치, 회사 내부 사안이면 RAG (둘 다 발동, 답 찾은 쪽이 응답)
     "correction": set(),  # correction 노드가 처리
     "meta": set(),
@@ -102,8 +102,8 @@ _VALID_TYPES: set[str] = set(_ROUTE_MATRIX.keys())
 def derive_routes(utterance_types: list[str]) -> list[Route]:
     """다중 라벨 → 발동 워커 라우트(합집합). 매트릭스가 단일 출처.
 
-    예: ["claim","question"] → {research,rag,critic} 합쳐서
-        ["research","rag","critic"] (order대로 정렬).
+    예: ["claim","question"] → {research,rag,logic_validator} 합쳐서
+        ["research","rag","logic_validator"] (order대로 정렬).
         ["meta"] → 라우트 없음 → ["none"].
     """
     routes: set[Route] = set()
@@ -112,7 +112,7 @@ def derive_routes(utterance_types: list[str]) -> list[Route]:
     if not routes:
         return ["none"]
     # 안정적 정렬 — 같은 라벨 집합이면 항상 같은 순서로 나오게(테스트·캐시 친화)
-    order: list[Route] = ["clarify", "research", "rag", "critic", "none"]
+    order: list[Route] = ["clarify", "research", "rag", "logic_validator", "none"]
     return [r for r in order if r in routes]
 
 
@@ -141,7 +141,7 @@ async def classify_node(state: PlanState) -> dict:
                     types.append(t)
         if not types:
             # LLM 개수 불일치(llm_items=None)이거나 빈 결과일 때의 안전 기본값.
-            # opinion은 RAG+비평만 타서(리서치 비용 0) 오분류 시 가장 피해가 적다.
+            # opinion은 RAG+논리검증만 타서(리서치 비용 0) 오분류 시 가장 피해가 적다.
             types = ["opinion"]
         # 알 수 없는 라벨은 버리고(타입 캐스팅), routes는 코드가 매트릭스로 재계산
         seg["utterance_types"] = [t for t in types if t in _VALID_TYPES]  # type: ignore[assignment]
@@ -154,6 +154,6 @@ async def classify_node(state: PlanState) -> dict:
         in_scope = llm_items[idx].in_scope if llm_items is not None else True
         seg["in_scope"] = in_scope
         if not in_scope:
-            seg["routes"] = ["none"]  # 리서치·RAG·비평 디스패치 안 됨 (clarify/dispatch 분기도 안 탐)
+            seg["routes"] = ["none"]  # 리서치·RAG·논리검증 디스패치 안 됨 (clarify/dispatch 분기도 안 탐)
 
     return {"turn_segments": segments}
