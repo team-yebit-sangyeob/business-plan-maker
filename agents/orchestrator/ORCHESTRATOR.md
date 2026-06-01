@@ -77,7 +77,10 @@ turn_segments[], slots{}, correction_log[], validation_reports[], turn_validatio
 pending_clarifications[], pending_question, output_request`.
 `initial_state()`가 빈 한 벌을 만든다 (슬롯 10개 모두 empty).
 > `validation_reports`는 **누적**, `turn_validation_reports`는 **이번 턴 dispatch 결과만**(매 턴 리셋).
-> 대화 에이전트의 결과 보고와 SSE 활동 표시가 '방금 돌린 것'만 보도록 분리.
+> 대화 에이전트의 결과 보고가 '방금 돌린 것'만 보도록 분리(`turn_validation_reports`).
+> SSE 에이전트 활동(`agent_start`→`validation_report`)은 `_stream`이 사후 재생하지 않고
+> **dispatch가 워커 호출 직전/직후에 실시간 emit**한다 — `progress.py`의 ContextVar emitter가
+> `chat.py`의 `asyncio.Queue`로 들어가고, `_stream`이 `run_turn`과 동시에 큐를 비워 흘린다.
 
 ---
 
