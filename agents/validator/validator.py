@@ -45,6 +45,7 @@ from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple, TypedDict
 
 from dotenv import load_dotenv
+from langsmith import traceable
 
 # ─── 공유 유틸리티 import ────────────────────────────────────────────────────────
 # rag_extractor.py 에 구현된 툴 함수·에이전트 헬퍼를 그대로 재사용한다.
@@ -296,6 +297,7 @@ class ValidatorAgent:
 
 # ─── 진입점: run_validator ───────────────────────────────────────────────────────
 
+@traceable(name="Validator - run_validator")
 def run_validator(
     rag_result: RagExtractorResult,
     verbose: bool = True,

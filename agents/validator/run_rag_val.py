@@ -51,6 +51,7 @@ PROJECT_ROOT  = VALIDATOR_DIR.parent.parent    # 프로젝트 루트
 sys.path.insert(0, str(PROJECT_ROOT))
 
 from dotenv import load_dotenv
+from langsmith import traceable
 load_dotenv(str(PROJECT_ROOT / ".env"))
 
 from agents.rag.claim_router_validation import run_router_pipeline
@@ -154,6 +155,7 @@ def build_claims_from_text(text: str) -> tuple[list, dict]:
 
 # ─── 메인 ────────────────────────────────────────────────────────────────────────
 
+@traceable(name="RAG+Val Full Pipeline")
 def main() -> None:
     """
     전체 파이프라인(Step 1 → Step 2 → Step 3)을 실행하고 결과를 저장한다.

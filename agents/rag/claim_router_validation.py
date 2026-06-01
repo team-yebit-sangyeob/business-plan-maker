@@ -26,6 +26,7 @@ load_dotenv(os.path.join(os.path.dirname(__file__), "..", "..", ".env"))
 # ─── 공통 설정 ─────────────────────────────────────────────────────────────────
 # OPENAI_MODEL 환경변수로 모델을 교체할 수 있음 (예: o4-mini, gpt-4o)
 MODEL: str = os.getenv("OPENAI_MODEL", "gpt-5.4-mini")
+TEMPERATURE: int = 0
 client = OpenAI(api_key=os.getenv("OPENAI_API_KEY"))
 
 
@@ -89,6 +90,7 @@ def extract_claim_from_text(user_input: str) -> tuple[ClaimExtractionResult, dic
         model=MODEL,
         instructions=_CLAIM_EXTRACTOR_SYSTEM,
         input=[{"role": "user", "content": user_input}],
+        temperature=TEMPERATURE,
     )
     try:
         serialized = response.model_dump()
