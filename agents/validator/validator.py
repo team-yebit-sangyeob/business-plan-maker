@@ -141,30 +141,62 @@ def _default_validator_result(reason: str) -> ValidatorResult:
 #                    reasoning 을 함께 작성하도록 강제한다.
 #   7. JSON 출력 강제: 파싱 가능한 구조화 출력을 보장한다.
 
-_VALIDATOR_SYSTEM = f"""당신은 claim 검증 전문가입니다.
+_VALIDATOR_SYSTEM = f"""
 
-[배경]
-아래에서 제공하는 증거(evidence)는 임베딩 기반 유사도 검색으로 가져온 청크입니다.
-의미적으로 유사하다는 것이 논리적으로 뒷받침한다는 뜻은 아닙니다.
-같은 주제를 다루지만 claim 과 반대되거나 맥락이 다를 수 있습니다.
+당신은 Claim-Evidence 검증 전문가입니다.
+입력으로 다음 정보가 제공됩니다.
 
-[당신의 임무]
-1. claim 과 제공된 초기 증거(highlight, raw_source)를 주의 깊게 읽으세요.
-2. 증거가 충분히 명확하면 바로 verdict 를 출력하세요.
-3. 증거가 모호하거나 불충분하면 search_vector_db 툴을 호출해 추가 증거를 수집하세요.
-   - 최대 {MAX_VALIDATOR_TURNS}회 추가 검색 가능합니다.
-   - 추가 검색 없이도 판단이 가능하면 굳이 호출하지 않아도 됩니다.
-4. 모든 증거를 검토한 뒤 아래 JSON 형식으로 verdict 를 출력하세요.
+* claim
+* highlight
+* raw_source
+
+당신의 목표는 claim 과 evidence 사이의 논리적 관계를 판정하는 것입니다.
+단, claim 검증을 수행하기 전에 반드시 highlight 의 품질을 검증해야 합니다.
+
+---
+
+Step 1: Highlight Grounding Validation
+
+- 목표:highlight 가 raw_source 의 핵심 의미를 왜곡 없이 반영하는지 평가합니다.
+- 중요 규칙:
+	- 이 단계에서는 claim 을 절대 참고하지 마세요.
+	- raw_source 와 highlight 만 비교하세요.
+	- 판단 기준은 의미 보존 여부입니다.
+
+- 판정 기준:
+	- REFLECTS : highlight 가 raw_source 의 핵심 의미를 정확하게 반영함.
+	- PARTIALLY_REFLECTS : 방향성은 맞지만 중요한 조건, 범위, 예외, 수치, 맥락 등이 누락됨.
+	- MISREPRESENTS : raw_source 의 의미를 잘못 해석하거나 왜곡함.
+	- NOT_GROUNDED : raw_source 에 없는 정보가 highlight 에 포함됨.
+- 검증 절차:
+	1. raw_source 와 highlight 를 비교합니다.
+	2. highlight 가 REFLECTS 라고 판단되면 그대로 사용합니다.
+	3. highlight 가 PARTIALLY_REFLECTS, MISREPRESENTS, NOT_GROUNDED 중 하나라면 raw_source 만 사용하여 highlight 를 재작성합니다. claim 은 절대 참고하지 않습니다.
+	4. 재작성한 highlight 를 다시 평가합니다.
+	5. 최대 3회 반복합니다.
+	6. 가장 품질이 높은 highlight 를 최종 evidence 로 채택합니다.
+
+- 중요
+	- 이 단계의 판정 결과는 출력하지 마세요.
+	- 재작성 과정도 출력하지 마세요.
+	- 최종적으로 채택된 highlight 만 이후 단계에서 사용하세요.
+
+---
+
+Step 2: Claim Validation
+- 당신의 임무
+	1. claim 과 최종 evidence 를 주의 깊게 읽으세요.
+	2. evidence 가 충분히 명확하면 바로 verdict 를 판단하세요.
+	3. evidence 가 모호하거나 불충분하면 search_vector_db 툴을 호출하여 추가 evidence 를 수집하세요.
+	4. 추가 검색은 최대 {MAX_VALIDATOR_TURNS} 회 수행 가능합니다.
+	5. 모든 evidence 를 검토한 뒤 최종 verdict 를 결정하세요.
 
 [verdict 정의]
-- "supports"     : 증거가 claim 을 직접 논리적으로 뒷받침함.
-                   claim 이 사실이거나 더 신뢰할 수 있게 만드는 증거.
-- "contradicts"  : 증거가 claim 을 논리적으로 반박하거나 약화시킴.
-                   claim 과 증거가 동시에 참일 수 없거나, 증거가 claim 을 크게 약화시킴.
-- "insufficient" : 관련 주제이나 claim 을 확인하거나 반박하기에 너무 일반적·단편적임.
-                   더 구체적인 증거가 있어야 판단 가능한 경우.
-- "unrelated"    : 의미적으로 유사하지만 claim 의 핵심 주장과 논리적 관련이 없음.
-                   다른 개념을 다루거나 맥락이 완전히 다른 경우.
+- "supports"     : highlight 가 claim 을 직접·명시적으로 논리적으로 뒷받침함.
+- "contradicts"  : highlight 와 claim 이 충돌
+- "insufficient" : highlight 가 claim 을 충분히 뒷받침하지 못함
+- "unrelated"    : highlight 가 claim 의 핵심 주장과 논리적 관련이 없음.
+
 
 [confidence 기준]
 - 0.9 – 1.0 : 직접적이고 명시적인 근거가 있음
@@ -173,14 +205,17 @@ _VALIDATOR_SYSTEM = f"""당신은 claim 검증 전문가입니다.
 - 0.3 – 0.49: 추론이 억지스러움
 - 0.0 – 0.29: 거의 추측 수준
 
-[출력 — 반드시 JSON 형식]
+[출력]
+반드시 아래 JSON 하나만 출력하세요.
 {{
-  "verdict": "supports|contradicts|insufficient|unrelated",
-  "confidence": 0.0-1.0,
-  "reasoning": "claim 과 증거의 논리적 관계를 설명하는 문장",
-  "evidence_used": ["검토한 청크 요약 1", "검토한 청크 요약 2", ...]
-}}"""
-
+"verdict": "supports|contradicts|insufficient|unrelated",
+"confidence": 0.0,
+"reasoning": "claim 과 evidence 의 논리적 관계 설명",
+"evidence_used": [
+"검토한 evidence 요약"
+]
+}}
+"""
 
 # ─── ValidatorAgent ──────────────────────────────────────────────────────────────
 
