@@ -185,7 +185,11 @@ export default function Chat() {
           </div>
         )}
 
-        <MessageList messages={messages} latestPdfId={latestPdfId} />
+        <MessageList
+          messages={messages}
+          latestPdfId={latestPdfId}
+          streaming={streaming}
+        />
 
         <ChatInput disabled={!session || streaming} onSend={send} />
       </main>
