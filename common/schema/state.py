@@ -47,13 +47,13 @@ class SlotSpec(TypedDict):
 SLOT_SPECS: dict[str, SlotSpec] = {
     "problem": {
         "title": "문제 정의",
-        "definition": "해결하려는 핵심 문제 — 누가·어떤 상황에서·무엇 때문에·어떤 손실을 보는지",
-        "boundary": "고객이 겪는 고통·손실만. 시장 규모·경쟁 데이터는 market, 그 돈 낼 사람은 target.",
+        "definition": "해결하려는 핵심 문제 — 누가, 어떤 상황에서, 무엇 때문에, 어떤 손실을 보는지",
+        "boundary": "고객이 겪는 고통과 손실만. 시장 규모와 경쟁 데이터는 market, 그 돈 낼 사람은 target.",
         "question": "어떤 문제예요? — 누가 · 어떤 상황에서 · 무엇 때문에 · 어떤 손실을 보는지까지 얘기해주면 좋아요.",
     },
     "target": {
         "title": "타겟 / 고객",
-        "definition": "돈을 낼 사람·조직 — 회사·부서·직책·규모·접촉 경로",
+        "definition": "돈을 낼 사람과 조직 — 회사·부서·직책·규모·접촉 경로",
         "boundary": "'누가 사는가'만. 그들이 겪는 고통은 problem.",
         "question": "타겟이 누구예요? — '어느 회사'가 아니라 그 안에서 계약서에 도장 찍는 사람·부서·규모·접촉 경로까지.",
     },
@@ -65,13 +65,13 @@ SLOT_SPECS: dict[str, SlotSpec] = {
     },
     "market": {
         "title": "시장 근거",
-        "definition": "시장 규모·성장 추세·경쟁사 존재 등 검증 가능한 외부 사실·데이터",
+        "definition": "시장 규모·성장 추세·경쟁사 존재 등 검증 가능한 외부 사실과 데이터",
         "boundary": "외부 '데이터'만. 그 경쟁사 대비 우리 우위는 advantage, 고객 고통은 problem.",
         "question": "시장 규모나 경쟁사 쪽은 짚어둔 데이터 있어요? 없으면 제가 찾아볼게요.",
     },
     "advantage": {
         "title": "차별점 / 경쟁우위",
-        "definition": "기존 대안·경쟁사 대비 우리가 이기는 이유·지속 우위(해자)",
+        "definition": "기존 대안과 경쟁사 대비 우리가 이기는 이유와 지속 우위(해자)",
         "boundary": "'왜 우리가 이기나'만. 무엇을 만드나는 solution, 경쟁사 데이터 자체는 market, 위협은 risks.",
         "question": "기존 대안이나 경쟁사 대비 우리만의 차별점·이기는 이유는 뭐예요?",
     },
@@ -89,14 +89,14 @@ SLOT_SPECS: dict[str, SlotSpec] = {
     },
     "resources": {
         "title": "필요 리소스",
-        "definition": "확보해야 할 역량 — 인력·예산 규모",
-        "boundary": "'무엇이 얼마나 필요한가(역량)'만. 시간순 단계·일정은 milestones.",
+        "definition": "확보해야 할 역량 — 인력과 예산 규모",
+        "boundary": "'무엇이 얼마나 필요한가(역량)'만. 시간순 단계와 일정은 milestones.",
         "question": "필요한 인력·예산 규모는 어떻게 보세요?",
     },
     "milestones": {
         "title": "마일스톤 / 일정",
-        "definition": "시간순 단계·일정 — 언제까지 어느 단계까지",
-        "boundary": "'언제 무엇을(시간축)'만. 필요한 인력·예산 규모는 resources.",
+        "definition": "시간순 단계와 일정 — 언제까지 어느 단계까지",
+        "boundary": "'언제 무엇을(시간축)'만. 필요한 인력과 예산 규모는 resources.",
         "question": "마일스톤 — 언제까지 어느 단계까지 가야 한다고 보세요?",
     },
     "risks": {
