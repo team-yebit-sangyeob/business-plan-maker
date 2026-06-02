@@ -52,10 +52,13 @@ OPTIONAL_SLOTS = tuple(s for s in ALL_SLOTS if s not in REQUIRED_SLOTS)
   → **출처 라벨은 기획서 3.3 그대로 유지** (에이전트 이름은 logic_validator로 바뀌었지만 라벨 enum은 불변).
 - `status` ∈ `empty / needs_clarification / filled`.
 
-### 발화 유형 6종 (`UtteranceType`)
+### 발화 유형 6종 (`UtteranceType`) — content / interaction 2-tier
 
-`clarification_needed · claim · opinion · correction · question · meta`
-> `claim`은 사실·가설·결정·제약을 한 유형으로 묶는다 — 라우팅이 동일(research+rag+logic_validator)하기 때문. 주장을 어떻게 분해·검증할지는 **오케가 아니라 리서치 쿼리 분해기**가 정한다.
+**content** (매트릭스로 워커 라우트 파생): `clarification_needed · claim · correction · question`
+**interaction** (디스패치 없음 → conversation이 직접 처리, `routes=["none"]`): `meta · recall`
+> classify가 세그먼트를 **먼저 interaction인지 content인지** 가른다 — 되묻기·진행신호처럼 말의 행위가 핵심인 발화가, 안에 낀 검증가능한 명제 때문에 claim으로 끌려가 워커가 발동하던 문제를 막는다.
+> `claim`은 사실·가설·결정·제약·**근거 있는 가치판단**을 한 유형으로 묶는다 — 라우팅이 동일(research+rag+logic_validator)하기 때문(구 `opinion` 흡수: 라우팅 차이가 research 발동뿐이라 분리 가치 없음). 주장을 어떻게 분해·검증할지는 **오케가 아니라 리서치 쿼리 분해기**가 정한다.
+> `recall`(되묻기)은 [최근 대화]에 이미 나온 걸 다시 묻는 발화 — 워커 없이 conversation이 대화 이력에서 답한다.
 > 세그먼트마다 `in_scope`(계획 관련 여부)도 함께 매겨, false면 워커를 막고 부드럽게 리다이렉트.
 
 ### 라우트 (`Route`)
@@ -145,17 +148,18 @@ START
 |---|:---:|:---:|:---:|:---:|
 | clarification_needed | ● | | | |
 | claim | | ● | ● | ● |
-| opinion | | | ● | ● |
 | question | | ● | ● | |
 | correction | (correction_node 처리) | | | |
-| meta | (워커 호출 없음) | | | |
+| meta | (interaction — 워커 호출 없음) | | | |
+| recall | (interaction — conversation이 이력에서 답) | | | |
 
-> `claim`(사실·가설·결정·제약)은 research+rag+logic_validator 모두 발동 — 라우팅이 같아 한 유형으로 묶는다.
+> `claim`(사실·가설·결정·제약·근거 있는 가치판단)은 research+rag+logic_validator 모두 발동 — 라우팅이 같아 한 유형으로 묶는다(구 `opinion` 포함).
+> interaction(`meta`·`recall`)은 빈 집합 → `derive_routes`가 `["none"]`. 키를 지우지 않고 빈 집합으로 두는 이유: 라벨이 `_VALID_TYPES` 필터를 통과해 살아남아야 conversation·correction이 그 라벨을 본다.
 > 검증 세부(전제 vs 사실 vs 결정 배경)는 오케가 아니라 리서치 쿼리 분해기가 claim·slot_context를 보고 정한다.
 
 - `derive_routes`: 여러 라벨의 활성 클러스터 **합집합**, `[clarify, research, rag, logic_validator, none]` 순서로 정렬.
-- segment가 미리 박은 라벨 보존 + LLM 추가 라벨 머지(화이트리스트·중복 제거), 둘 다 없으면 `opinion` 기본값.
-- LLM 호출은 **세그먼트 전체 배치 1회** (호출 절약), 개수 어긋나면 LLM 결과 폐기.
+- segment가 미리 박은 라벨 보존 + LLM 추가 라벨 머지(화이트리스트·중복 제거), 둘 다 없으면 `clarification_needed` 기본값(분류 실패 시 안전 폴백 — `_VALID_TYPES`를 통과하고 `clarify`만 타 워커 비용 0; claim 폴백은 실패 턴마다 워커를 터뜨린다).
+- LLM 호출은 **세그먼트 전체 배치 1회**(호출 절약, payload에 최근 대화도 실어 `recall` 판정), 개수 어긋나면 LLM 결과 폐기.
 
 ### 3.3 `correction_node` (`nodes/correction.py`)
 
@@ -169,7 +173,7 @@ START
 ### 3.4 `extract_slot_fills_node` (`nodes/correction.py`)
 
 dispatch 경로에서만 실행 (그래프상 dispatch 다음). **비어있는 슬롯**에 들어갈 값을 세그먼트에서 추출하고, **슬롯 선택의 단일 권위**다(segment의 `target_slot` 힌트는 payload에 prior로만 넘겨 두 판단이 갈리는 걸 줄인다).
-- 후보 = `claim/opinion` 라벨 가진 세그먼트. 빈 슬롯 없으면 LLM 호출 안 함 (비용 절약).
+- 후보 = `claim` 라벨 가진 세그먼트. 빈 슬롯 없으면 LLM 호출 안 함 (비용 절약).
 - `_FILL_SYSTEM`에 `slot_guide_text()` 임베드. LLM은 fill마다 `{slot, value, confidence(clear|ambiguous), alt_slots[], reason}` 반환.
 - **명확(`clear`)** → 빈 슬롯에 즉시 주입(`source_label=USER`). 이미 찬 슬롯은 correction_node 담당.
 - **애매(`ambiguous` 또는 `alt_slots` 있음)** → 주입하지 않고 `pending_confirmations`에 한 건 쌓음(후보 중 빈 슬롯이 하나도 없으면 스킵). 다음 턴 `confirm_resolve`(§3.0)가 사용자 답으로 확정. → "같은 내용이 다른 슬롯에 들어가는" 문제를 (a)경계 명문화 (b)선택 단일화 (c)애매 시 사용자 확인으로 막는다.
@@ -177,8 +181,8 @@ dispatch 경로에서만 실행 (그래프상 dispatch 다음). **비어있는 �
 ### 3.5 `parallel_dispatch_workers_node` (`nodes/dispatch.py`)
 
 **워커 라우트(`research/rag/logic_validator`)를 가진** 세그먼트를 보고 워커를 **2단계로 호출**.
-> 라우트 유무로 판단 — `opinion`(routes=`rag·logic_validator`)도 매트릭스대로 디스패치된다.
-> 명확화-only 턴은 `_clarify_branch`가 dispatch 자체를 우회하므로 보류된다.
+> 라우트 유무로 판단 — `claim`·`question` 등 워커 라우트가 있는 세그먼트만 디스패치된다.
+> interaction(`meta`·`recall`)·`correction`·명확화-only 세그먼트는 워커 라우트가 없어 제외(명확화-only 턴은 `_clarify_branch`가 dispatch 자체를 우회).
 
 **2단계 디스패치** (리서치·RAG 병렬 → 논리검증 후속):
 ```python
@@ -198,7 +202,7 @@ logic_validator → run_logic_validator(subject, rag_result, research_report)   
 > **research 보조 근거 통합**: claim 세그먼트에선 같은 세그먼트의 1단계 research 결과(findings·sources)를
 > 텍스트로 묶어 보조 근거로 함께 넘긴다. validator는 `research_evidence`(Optional[str]) 인자로 하위호환
 > 확장돼 — 인자 없으면 user_msg가 기존과 바이트 동일 — **사내 RAG 근거를 1차, 외부 research를 보조**로
-> 본다. opinion(research 라우트 없음)은 `research_report=None`으로 폴백해 기존대로 사내 근거만으로 판정.
+> 본다. (logic_validator는 claim에서만 발동하고 claim은 항상 research를 함께 타므로 보조 근거가 늘 따라온다; research가 비면 `research_report=None` 폴백.)
 >
 > **역할 분담**: `rag`는 retrieval만(`agreement=unknown`), `logic_validator`는 판정만
 > (verdict→agreement: supports→confirms / contradicts→contradicts / insufficient→partial /
@@ -228,10 +232,10 @@ logic_validator → run_logic_validator(subject, rag_result, research_report)   
 ### 3.7 `conversation_node` (`agents/conversation/agent.py`)
 
 state에서 **intent 목록을 결정론으로 뽑아**(`_build_intents`) **LLM 1회로 한 응답으로 렌더** (대화 에이전트). conversation_spec TRIGGER MATRIX 전체를 지원:
-`ask_slot · confirm_slot · clarify · report_findings · answer_question · redirect · reject_output · acknowledge · deliver_plan`.
+`ask_slot · confirm_slot · clarify · report_findings · answer_question · recall · redirect · reject_output · acknowledge · deliver_plan`.
 > 구현 차이: conversation_spec은 `report_research`·`report_critique`를 별도 intent로 두지만, 코드는 한 주제의 research·rag·logic_validator 결과를 **`report_findings` 하나로 통합**해 넘긴다(렌더 프롬프트가 출처별로 구분). spec이 "둘은 한 턴에 묶일 수 있다(통합은 integrator 몫)"고 한 것을 그대로 반영.
-- **intent 선택(결정론)**: 이번 턴 정정→`acknowledge`, `pending_confirmations`→`confirm_slot`(보류값과 후보 슬롯 제시), `in_scope=false`→`redirect`, `turn_validation_reports`→주제별 `report_findings`(claim·opinion) 또는 `answer_question`(question), `output_request`→`reject_output`(type0)·`deliver_plan`(type1/2), `clarify` 라우트→`clarify`. 위에서 막지 않았고 **확인 대기(`confirm_slot`)도 없으면** `ALL_SLOTS` 첫 빈칸으로 `ask_slot`(confirm_slot·clarify·type0·deliver가 있으면 다음 질문 보류).
-- **렌더(LLM)**: intent 목록 JSON을 받아 한 메시지로 매끄럽게 연결(예: 결과 보고 → 다음 질문). 슬롯별 질문 톤은 `SLOT_SPECS[...]["question"]`(단일 원천)에서 가져와 `ask_slot.example`로 주입.
+- **intent 선택(결정론)**: 이번 턴 정정→`acknowledge`, `recall` 라벨 세그먼트→`recall`(대화 이력에서 답), `pending_confirmations`→`confirm_slot`(보류값과 후보 슬롯 제시), `in_scope=false`→`redirect`, `turn_validation_reports`→주제별 `report_findings`(claim) 또는 `answer_question`(question), `output_request`→`reject_output`(type0)·`deliver_plan`(type1/2), `clarify` 라우트→`clarify`. 위에서 막지 않았고 **확인 대기(`confirm_slot`)도 없으면** `ALL_SLOTS` 첫 빈칸으로 `ask_slot`(recall·confirm_slot·clarify·type0·deliver가 있으면 다음 질문 보류).
+- **렌더(LLM)**: intent 목록 JSON(+최근 대화 `recent_messages`)을 받아 한 메시지로 매끄럽게 연결(예: 결과 보고 → 다음 질문). `recent_messages`는 `recall` intent를 답할 때만 근거로 쓴다. 슬롯별 질문 톤은 `SLOT_SPECS[...]["question"]`(단일 원천)에서 가져와 `ask_slot.example`로 주입.
 - **분류·판단은 안 함** — 무엇을 보고/질문할지는 state에서 파생, 대화는 표현만.
 
 ### 3.8 `response_integrator_node` (`nodes/integrator.py`)
@@ -262,7 +266,8 @@ state에서 **intent 목록을 결정론으로 뽑아**(`_build_intents`) **LLM 
 | 정정 신호 | (재검증 보류 — 아래 갭) | **필수** | correction_node 먼저 |
 | 출력 요청 | Planner (게이트 통과 시) | 없음 | Type 0/1/2 |
 | 스코프 밖 발화 | 없음 (리다이렉트) | 없음 | `in_scope=false` → routes none |
-| 메타·단순응답 | 없음 | 없음 | "응"·"다음" 등 |
+| 메타·단순응답 | 없음 | 없음 | interaction(`meta`) — "응"·"다음" 등 |
+| 되묻기 | 없음 | 없음 | interaction(`recall`) — 대화 이력에서 답("아까 ~라며?") |
 | 애매한 슬롯 값 | 라벨에 따라 | 보류→확인 후 | fill `ambiguous` → `confirm_slot` → 다음 턴 `confirm_resolve` |
 
 > **신호 키워드 정확도**("말고"·"빼자"·"뽑아줘")가 성능의 큰 부분. 첫 단계인
@@ -270,7 +275,7 @@ state에서 **intent 목록을 결정론으로 뽑아**(`_build_intents`) **LLM 
 
 ### 기획서 대비 보강·갭
 
-- **보강 (코드 > 기획서)**: 발화 유형 `question` 추가(총 6종), 슬롯 `advantage`(차별점) 추가(총 10개).
+- **보강 (코드 > 기획서)**: 발화 유형 `question`·`recall` 추가·`opinion` 제거(→`claim` 흡수)·`meta`를 interaction tier로 — 총 6종(content 4 + interaction 2). 슬롯 `advantage`(차별점) 추가(총 10개).
 - **알려진 갭 (코드 < 기획서)**: 정정(correction) 시 교체된 슬롯 값의 **재검증 미동작**.
   기획서 5장은 리서치·RAG '재발동'을 요구하지만 현재는 슬롯 덮어쓰기만 함
   (`correction.py`의 TODO). 실 워커 연결 시 구현 예정.
@@ -281,7 +286,7 @@ state에서 **intent 목록을 결정론으로 뽑아**(`_build_intents`) **LLM 
 
 1. **상시 진입점** — 조건부가 아니라 모든 메시지가 오케스트레이터를 거친다.
 2. **판단/표현 분리** — 무엇을 물을지(오케) vs 어떻게 물을지(대화).
-3. **분류 일원화** — 6유형 라벨링은 오케 단독. 논리검증·워커는 라벨링된 발화를 입력으로만 받음.
+3. **분류 일원화** — 발화 유형(content/interaction 2-tier) 라벨링은 오케 단독. 논리검증·워커는 라벨링된 발화를 입력으로만 받음.
 4. **LLM은 제안, 코드는 결정** — 라우팅·분기·Type 판정은 결정론 함수가 최종 확정.
 5. **새로 추가된 것만 처리** — 매 턴 전체 재계산 X. 정정 이력은 별도 추적.
 6. **입력은 분해, 출력은 절제** — 세그멘테이션 + 다중 라벨 + 라우팅 / 응답은 명확화 + 핵심 질문 1~2개.
