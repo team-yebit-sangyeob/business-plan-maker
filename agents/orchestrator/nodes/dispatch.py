@@ -7,7 +7,7 @@ spec v0.7.5: "검증" 단계는 사라지고 logic_validator·리서치·RAG 호
           (ValidationReport)와 함께 원본 RagExtractorResult를 돌려준다.
   2단계 — logic_validator는 같은 세그먼트의 1단계 RAG 산출물(RagExtractorResult)을 입력으로
           받아 claim ↔ 사내 근거의 논리적 지지 여부(verdict→agreement)를 판정한다.
-라우트 매트릭스상 logic_validator는 항상 rag와 동반하므로(claim·opinion), 판정에 쓸 RAG
+라우트 매트릭스상 logic_validator는 항상 rag와 동반하므로(claim), 판정에 쓸 RAG
 결과는 늘 존재한다. 만약 RAG가 근거를 못 찾으면(rag_result=None) '근거 없음'으로 흐른다.
 """
 from __future__ import annotations
@@ -59,8 +59,8 @@ async def parallel_dispatch_workers_node(state: PlanState) -> dict:
     slots = state.get("slots") or {}
 
     # 디스패치 대상 세그먼트만 추림 (subject 비어있으면 제외).
-    # '워커 라우트 유무'로 판단 — opinion(routes=rag·logic_validator)도 기획서 매트릭스대로
-    # 디스패치되도록. (명확화-only 턴은 graph의 _clarify_branch가 미리 우회)
+    # '워커 라우트 유무'로 판단 — claim·question 등 워커 라우트가 있으면 매트릭스대로 디스패치.
+    # (interaction(meta·recall)·correction·명확화-only 세그먼트는 워커 라우트가 없어 제외)
     targets: list[tuple[str, list[str], str]] = []
     for seg in segments:
         routes = seg.get("routes") or []

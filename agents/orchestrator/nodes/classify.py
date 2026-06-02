@@ -24,36 +24,35 @@ from __future__ import annotations
 from pydantic import BaseModel, Field
 
 from common.schema import PlanState
-from common.schema.state import Route
+from common.schema.state import Route, recent_history
 from agents.orchestrator.llm import call_json
 
 
 _SYSTEM = """오케스트레이터 다중라벨 분류
-각 세그먼트의 canonical_text를 보고 6개 발화 유형 중 해당하는 것을 모두 고른다(다중 라벨 허용).
+각 세그먼트의 canonical_text를 보고, 먼저 상호작용(interaction)인지 내용(content)인지 가른다. 그다음 해당하는 유형을 모두 고른다(다중 라벨 허용).
 
-유형:
+상호작용(interaction) — 워커를 부르지 않고 conversation이 대화로 받는다:
+- meta: 단순 응답이나 진행 신호 (예: "응 다음", "ok", "좋아")
+- recall: 직전 대화에 이미 나온 내용을 다시 묻거나 확인하는 되묻기 ([최근 대화]에 있는 걸 되묻는 경우. 예: "아까 일본 된다며?", "방금 뭐랬지?", "우리 타겟 뭐로 정했지?")
+
+내용(content) — 검증·명확화·정정·정보탐색이 필요하다:
 - clarification_needed: 모호하거나 추상적이라 추가 질문이 필요함
-- claim: 검증할 수 있는 내용 발화 — 외부 사실 주장, 가설, 결정, 제약을 모두 포함 (예: "게임 시장 포화" / "일본에서 통할 거 같다" / "타겟은 네이버로 가자" / "예산 1억, 6개월")
-- opinion: 주관적인 선호 (예: "B2B가 우리 색깔")
+- claim: 검증할 수 있는 내용 발화 — 외부 사실 주장, 가설, 결정, 제약, 근거 있는 가치판단을 모두 포함 (예: "게임 시장 포화" / "일본에서 통할 거 같다" / "타겟은 네이버로 가자" / "예산 1억, 6개월" / "B2B가 우리 색깔, 영업 인프라도 강하니까")
 - correction: 정정이나 취소 (예: "아니, 빼자")
-- question: 사용자가 정보를 물어봄 (예: "웹툰 시장 규모가 어떻게 돼?")
-- meta: 단순 응답이나 진행 신호 (예: "다음", "뽑아줘")
+- question: 대화에 없던 새 정보를 물어봄 (예: "웹툰 시장 규모가 어떻게 돼?")
 
-여러 유형이 한 세그먼트에 동시에 해당할 수 있다 — 예: "시장 규모 어때? 타겟은 네이버로 가자" 같은 한 문장이면 question+claim. 검증할 게 없는 주관 선호면 opinion 단독으로 둔다.
+여러 유형이 한 세그먼트에 동시에 해당할 수 있다 — 예: "시장 규모 어때? 타겟은 네이버로 가자" 같은 한 문장이면 question+claim. 단, recall과 meta는 단독으로 둔다(되묻기·진행신호는 그 자체가 발화의 핵심).
 
 구분 가이드 — 헷갈리는 경계:
-- claim vs opinion: 핵심 발화가 참/거짓을 따질 사실 주장이면 claim, 가치판단이나 선호면 opinion.
-  의견의 근거도 RAG와 논리검증으로 점검되지만 근거의 검증 가능성은 분류를 가르지 않는다 — 둘의 라우팅 차이는 리서치(외부 웹) 발동 여부뿐.
+- recall vs question: 이미 [최근 대화]에 나온 걸 다시 확인하면 recall(대화 이력에서 답함), 대화에 없는 새 정보를 물으면 question(리서치·RAG로 답함). 애매하면 question.
+- claim: 참/거짓이나 적합성을 따질 수 있으면 가치판단이라도 claim이다. 근거가 붙은 선호("B2B가 우리 색깔에 맞아, 영업 인프라도 강하니까")도 claim — 그 근거를 RAG·논리검증이 따진다. 단, 검증할 전제 없이 막연한 답변("월 매출 잘 나오게", "그냥 B2B가 끌려")은 claim이 아니라 clarification_needed로 우선 라벨.
   · "B2B 시장이 더 커" → claim (시장 규모는 외부 사실)
-  · "난 B2B가 더 끌려" → opinion (주관)
-  · "B2B가 우리 색깔에 맞아, 영업 인프라도 강하니까" → opinion ('우리 색깔'은 가치판단 — 근거('영업 인프라 강함')는 RAG가 따지지만 라벨은 opinion)
   · "타겟은 네이버로 가자" → claim (결정 = 향후 슬롯에 박히는 약속)
-  · 단, 슬롯 통과조건 미달의 모호한 답변("월 매출 잘 나오게")은 claim이 아니라 clarification_needed로 우선 라벨.
 - correction은 '이전에 정한 것을 무르거나 바꿀 때'만. 정정 키워드가 있어도 새 진술이면 claim:
   · "아 카카오는 빼자" → correction (앞서 넣은 타겟을 무름)
   · "네이버 말고 카카오로 가자" → correction (대상 교체)
   · "말고 또 뭐가 있을까?" → question (정정 아님 — 키워드만 같음)
-  · "바꾸는 게 어렵진 않아" → claim/opinion (정정 의도 없음)
+  · "바꾸는 게 어렵진 않아" → claim (정정 의도 없음)
 - 한 세그먼트 다중 라벨 예:
   · "시장 규모 어때? 그리고 타겟은 네이버로 가자" → ["question","claim"]
   · "그건 취소하고, 일본 시장은 성장 중이잖아" → ["correction","claim"]
@@ -84,15 +83,18 @@ class ClassifyOut(BaseModel):
     items: list[ClassifyItem]
 
 
-# 5장 matrix — 유형 → 활성 클러스터
-# ● = 항상, △ = 검증 가능 정보면 (간단화: 일단 항상 호출), — = 스킵
+# 유형 → 활성 클러스터. content는 라우트를 파생하고, interaction(meta·recall)은 빈 집합 →
+# derive_routes가 ["none"]. interaction을 '키 삭제'가 아니라 '빈 집합'으로 두는 이유: 라벨이
+# _VALID_TYPES 필터(아래)를 통과해 살아남아야 conversation·correction이 그 라벨을 본다.
 _ROUTE_MATRIX: dict[str, set[Route]] = {
+    # content — 워커 라우트 파생
     "clarification_needed": {"clarify"},
-    "claim": {"research", "rag", "logic_validator"},  # 사실·가설·결정·제약 통합 — 전제는 리서치, 회사 적합성은 RAG, 논리는 logic_validator
-    "opinion": {"rag", "logic_validator"},
+    "claim": {"research", "rag", "logic_validator"},  # 사실·가설·결정·제약·근거 있는 가치판단 통합 — 전제는 리서치, 회사 적합성은 RAG, 논리는 logic_validator
     "question": {"research", "rag"},  # 외부 사실이면 리서치, 회사 내부 사안이면 RAG (둘 다 발동, 답 찾은 쪽이 응답)
     "correction": set(),  # correction 노드가 처리
+    # interaction — 디스패치 없음, conversation이 처리
     "meta": set(),
+    "recall": set(),  # 되묻기 — 워커 없이 conversation이 대화 이력에서 답
 }
 
 
@@ -104,7 +106,7 @@ def derive_routes(utterance_types: list[str]) -> list[Route]:
 
     예: ["claim","question"] → {research,rag,logic_validator} 합쳐서
         ["research","rag","logic_validator"] (order대로 정렬).
-        ["meta"] → 라우트 없음 → ["none"].
+        ["meta"]/["recall"] → 라우트 없음 → ["none"] (interaction — 워커 미발동).
     """
     routes: set[Route] = set()
     for t in utterance_types:
@@ -122,7 +124,9 @@ async def classify_node(state: PlanState) -> dict:
         return {"turn_segments": []}
 
     texts = [s.get("canonical_text") or s.get("text", "") for s in segments]
-    payload = "\n".join(f"{i+1}. {t}" for i, t in enumerate(texts))
+    seg_list = "\n".join(f"{i+1}. {t}" for i, t in enumerate(texts))
+    # 되묻기(recall) 판정에 직전 대화가 필요하다 — 같은 LLM 호출, 프롬프트만 풍부해짐.
+    payload = f"[최근 대화]\n{recent_history(state)}\n\n[세그먼트]\n{seg_list}"
 
     out = await call_json(_SYSTEM, payload, ClassifyOut)
 
@@ -138,8 +142,10 @@ async def classify_node(state: PlanState) -> dict:
                     types.append(t)
         if not types:
             # LLM 개수 불일치(llm_items=None)이거나 빈 결과일 때의 안전 기본값.
-            # opinion은 RAG+논리검증만 타서(리서치 비용 0) 오분류 시 가장 피해가 적다.
-            types = ["opinion"]
+            # clarification_needed는 _VALID_TYPES에 있어 아래 필터를 통과하고, clarify만 타서
+            # 워커 비용 0 + 사용자에게 되묻게 만든다 — 분류 실패 시 가장 피해가 적은 라벨.
+            # (claim으로 두면 실패 턴마다 리서치+RAG+논리검증이 터진다.)
+            types = ["clarification_needed"]
         # 알 수 없는 라벨은 버리고(타입 캐스팅), routes는 코드가 매트릭스로 재계산
         seg["utterance_types"] = [t for t in types if t in _VALID_TYPES]  # type: ignore[assignment]
         seg["routes"] = derive_routes(seg["utterance_types"])

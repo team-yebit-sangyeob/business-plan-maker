@@ -129,14 +129,29 @@ def slot_guide_text() -> str:
     )
 
 
-# 발화 유형 6종 — 매 턴 세그먼트마다 라벨링(다중 가능). 괄호는 발동 워커.
+def recent_history(state: PlanState, n: int = 10) -> str:
+    """최근 messages n개를 프롬프트용 한 덩이로 렌더 — segment·classify·conversation 공용.
+
+    되묻기(recall) 판정과 대화 이력 기반 응답에 쓴다(화자·턴·내용 한 줄씩).
+    """
+    messages = state.get("messages") or []
+    tail = messages[-n:]
+    if not tail:
+        return "[이전 대화 없음]"
+    return "\n".join(f"[{m['role']} t{m['turn']}] {m['content']}" for m in tail)
+
+
+# 발화 유형 — content는 매트릭스로 워커 라우트를 파생하고, interaction(meta·recall)은
+# 디스패치 없이 conversation이 직접 받는다(derive_routes가 ["none"]). 다중 라벨 가능.
 UtteranceType = Literal[
+    # content — 워커 라우트 파생
     "clarification_needed",  # 모호/추상 → 명확화. 예: "웹툰 감수성으로 사업하고 싶어"
-    "claim",                 # 검증 가능한 내용 발화(사실·가설·결정·제약) → 리서치+RAG+논리검증. 예: "게임 시장 포화 상태래" / "일본에서 통할 거 같아" / "타겟은 네이버로 가자" / "예산 1억, 6개월"
-    "opinion",               # 주관 선호 → RAG+논리검증. 예: "우리 색깔엔 B2B가 더 맞아"
-    "correction",            # 정정·취소 → 슬롯 덮어쓰기. 예: "아 카카오는 빼자"
-    "question",              # 사용자 정보 요청 → 리서치(외부)·RAG(내부). 예: "웹툰 시장 규모가 어떻게 돼?"
+    "claim",                 # 검증 가능한 내용 발화(사실·가설·결정·제약·근거 있는 가치판단) → 리서치+RAG+논리검증. 예: "게임 시장 포화 상태래" / "타겟은 네이버로 가자" / "우리 색깔엔 B2B가 맞아(영업 인프라 강함)"
+    "correction",            # 정정·취소 → 슬롯 덮어쓰기(correction_node). 예: "아 카카오는 빼자"
+    "question",              # 새 정보 요청 → 리서치(외부)·RAG(내부). 예: "웹툰 시장 규모가 어떻게 돼?"
+    # interaction — 디스패치 없음, conversation이 처리
     "meta",                  # 단순응답·진행 신호. 예: "응 다음", "여기까지 뽑아줘"
+    "recall",                # 되묻기 — 직전 대화를 다시 묻거나 확인 → conversation이 대화 이력에서 답. 예: "아까 일본 된다며?"
 ]
 
 

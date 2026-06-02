@@ -51,7 +51,7 @@ def _clarify_branch(state: PlanState) -> Literal["dispatch", "gate"]:
     """명확화(clarify 라우트)만 있고 부를 워커가 하나도 없으면 디스패치 우회.
 
     dispatch_node와 같은 기준(워커 라우트 유무)으로 판단해 일관성 유지 —
-    부를 워커가 있으면(claim·question·opinion 등) 명확화가 섞여 있어도 dispatch로 보낸다.
+    부를 워커가 있으면(claim·question 등) 명확화가 섞여 있어도 dispatch로 보낸다.
     """
     segments = state.get("turn_segments") or []
     has_clarify = any("clarify" in (s.get("routes") or []) for s in segments)

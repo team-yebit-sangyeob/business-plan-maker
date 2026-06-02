@@ -23,7 +23,7 @@ from typing import Optional
 from pydantic import BaseModel
 
 from common.schema import PlanState, Segment
-from common.schema.state import ALL_SLOTS, slot_guide_text
+from common.schema.state import ALL_SLOTS, recent_history, slot_guide_text
 from agents.orchestrator.llm import call_json
 
 
@@ -88,14 +88,6 @@ def _slot_snapshot(state: PlanState) -> str:
     return "\n".join(lines)
 
 
-def _recent_history(state: PlanState, n: int = 10) -> str:
-    messages = state.get("messages") or []
-    tail = messages[-n:]
-    if not tail:
-        return "[이전 대화 없음]"
-    return "\n".join(f"[{m['role']} t{m['turn']}] {m['content']}" for m in tail)
-
-
 async def segment_node(state: PlanState) -> dict:
     user_input = state.get("user_input", "")
     if not user_input.strip():
@@ -103,7 +95,7 @@ async def segment_node(state: PlanState) -> dict:
 
     prompt = (
         f"[현재 슬롯]\n{_slot_snapshot(state)}\n\n"
-        f"[최근 대화]\n{_recent_history(state)}\n\n"
+        f"[최근 대화]\n{recent_history(state)}\n\n"
         f"[이번 턴 사용자 발화]\n{user_input}"
     )
     out = await call_json(_SYSTEM, prompt, SegmentOut)
