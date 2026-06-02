@@ -4,8 +4,7 @@
 자기충족 문장(canonical_text)으로 다시 쓰이게 한다. 다운스트림 클러스터의
 쿼리 분해기가 그 문장만 받아도 검색 쿼리를 만들 수 있어야 함.
 
-여기서는 분류를 끝내지 않는다 — hints로 신호가 뚜렷한 4종(correction/clarification/
-question/meta)만 미리 박고, 나머지 본분류(claim/opinion)는 classify_node가 한다.
+분류(utterance_types)는 classify_node가 전담한다.
 
 worked example
 --------------
@@ -13,16 +12,15 @@ worked example
 이번 턴 user_input:
     "게임 시장 포화고, 일본에서 통할 거 같아. 근데 '신사업'이 좀 추상적이긴 해."
 → segments (3개):
-    1. text="게임 시장 포화고"            canonical="한국 게임 시장이 포화 상태다"           hints=[]
-    2. text="일본에서 통할 거 같아"        canonical="웹툰 IP가 일본 시장에서 통할 것이다"     hints=[]
-    3. text="'신사업'이 추상적이긴 해"     canonical="'신사업'이라는 방향이 아직 추상적이다"   hints=["clarification"]
-  (1·2의 본분류는 classify가 claim으로 채움. 3은 여기서 clarification_needed로 박음.)
+    1. text="게임 시장 포화고"            canonical="한국 게임 시장이 포화 상태다"
+    2. text="일본에서 통할 거 같아"        canonical="웹툰 IP가 일본 시장에서 통할 것이다"
+    3. text="'신사업'이 추상적이긴 해"     canonical="'신사업'이라는 방향이 아직 추상적이다"
 """
 from __future__ import annotations
 
 from typing import Optional
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel
 
 from common.schema import PlanState, Segment
 from common.schema.state import ALL_SLOTS, slot_guide_text
@@ -44,23 +42,22 @@ _SYSTEM = (
 """
     + slot_guide_text()
     + """
-4. hints: 다음 중 해당하는 것만 배열로 — "correction"(아니/말고/빼자/사실은 등), "meta"(다음/그만/뽑아 등), "clarification"(모호/추상), "question"(사용자가 물어봄).
 
 맥락 복원 핵심: [현재 슬롯]·[최근 대화]를 근거로 대명사·지시어("그거","거기","그쪽")·생략된 주어/대상을 모두 채운다. 한 발화에 여러 의미 단위가 있으면 쪼개고, 단일하면 1개만 낸다.
 
 예시 (이전 맥락: 사용자가 "웹툰 IP 신사업", 타겟 "네이버·카카오"를 언급한 상태):
 입력: "카카오는 빼고, 통할 거 같아."
 출력:
-  1. text="카카오는 빼고"   canonical_text="타겟에서 카카오를 뺀다"   target_slot_hint="target"  hints=["correction"]
-  2. text="통할 거 같아"     canonical_text="웹툰 IP가 일본 시장에서 통할 것이다"  target_slot_hint="market"  hints=[]
+  1. text="카카오는 빼고"   canonical_text="타겟에서 카카오를 뺀다"   target_slot_hint="target"
+  2. text="통할 거 같아"     canonical_text="웹툰 IP가 일본 시장에서 통할 것이다"  target_slot_hint="market"
 
 입력: "그거 시장 규모는 어떻게 돼?"
 출력:
-  1. text="그거 시장 규모는 어떻게 돼?"  canonical_text="웹툰 IP 신사업의 시장 규모는 어느 정도인가?"  target_slot_hint="market"  hints=["question"]
+  1. text="그거 시장 규모는 어떻게 돼?"  canonical_text="웹툰 IP 신사업의 시장 규모는 어느 정도인가?"  target_slot_hint="market"
 
 입력: "음 신사업이라기엔 좀 막연하네"
 출력:
-  1. text="신사업이라기엔 좀 막연하네"  canonical_text="'웹툰 IP 신사업'이라는 방향이 아직 막연하다"  target_slot_hint=null  hints=["clarification"]
+  1. text="신사업이라기엔 좀 막연하네"  canonical_text="'웹툰 IP 신사업'이라는 방향이 아직 막연하다"  target_slot_hint=null
 
 JSON만 출력. 다른 텍스트 금지."""
 )
@@ -70,7 +67,6 @@ class SegmentItem(BaseModel):
     text: str
     canonical_text: str
     target_slot_hint: Optional[str] = None
-    hints: list[str] = Field(default_factory=list)
 
 
 class SegmentOut(BaseModel):
@@ -117,15 +113,6 @@ async def segment_node(state: PlanState) -> dict:
             "target_slot": slot_hint,
             "routes": [],
         }
-        # hints로 신호가 뚜렷한 4종만 미리 박는다. 본분류·라우팅은 classify가 한다.
-        if "correction" in item.hints:
-            seg["utterance_types"] = ["correction"]
-        elif "clarification" in item.hints:
-            seg["utterance_types"] = ["clarification_needed"]
-        elif "question" in item.hints:
-            seg["utterance_types"] = ["question"]
-        elif "meta" in item.hints:
-            seg["utterance_types"] = ["meta"]
         segments.append(seg)
 
     if not segments:

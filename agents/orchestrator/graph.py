@@ -12,7 +12,7 @@
 직접 파생한다(워커 호출은 routes, 정정 처리는 utterance_types).
 
 end-to-end trace 예시 (turn 5, "카카오는 빼자. 예산은 1억으로 가자."):
-  segment        → [seg1 "카카오는 빼자"(hints=correction), seg2 "예산 1억으로 가자"]
+  segment        → [seg1 "카카오는 빼자", seg2 "예산 1억으로 가자"]
   classify       → seg1=["correction"](routes=none), seg2=["claim"](routes=research/rag/logic_validator)
   correction     → target "네이버·카카오" → "네이버" (correction_log에 기록)
   _clarify_branch→ clarify 라우트 없고 워커 라우트 있음 → "dispatch"

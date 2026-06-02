@@ -130,9 +130,6 @@ async def classify_node(state: PlanState) -> dict:
     llm_items = out.items if len(out.items) == len(segments) else None
 
     for idx, seg in enumerate(segments):
-        # segment 노드가 hints로 미리 박은 라벨(correction/clarification_needed/question/meta)은
-        # 신뢰도가 높아 보존하고, classify LLM 결과를 그 위에 합친다.
-        # 예: segment가 ["correction"]을 박고 LLM이 ["claim"]을 더하면 → ["correction","claim"]
         prior = list(seg.get("utterance_types") or [])
         types: list[str] = list(prior)
         if llm_items is not None:
