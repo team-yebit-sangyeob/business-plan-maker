@@ -9,6 +9,7 @@ state에서 결정론으로 뽑고(_build_intents), 그 intent 목록을 LLM 1�
   clarify          — 모호한 발화 좁히기(있으면 다음 슬롯 질문은 보류)
   report_findings  — 리서치(외부)·RAG(내부)·논리검증 결과 전달 + 전제 교정
   answer_question  — 사용자 질문에 리서치·RAG가 찾은 답 전달(질문은 논리검증 미경유)
+  recall           — 되묻기: 직전 대화 내용을 대화 이력에서 찾아 답(워커·검색 없이)
   redirect         — 스코프 밖 발화를 부드럽게 되돌림
   reject_output    — 필수 슬롯 미달 상태의 출력 요청 거절(type0)
   acknowledge      — 정정 반영 확인
@@ -24,7 +25,7 @@ import json
 from pydantic import BaseModel
 
 from common.schema import PlanState
-from common.schema.state import ALL_SLOTS, SLOT_SPECS, slot_title
+from common.schema.state import ALL_SLOTS, SLOT_SPECS, recent_history, slot_title
 from agents.orchestrator.llm import call_json
 from agents.orchestrator.nodes.gate import required_missing, optional_missing
 
@@ -38,10 +39,12 @@ _SYSTEM = """대화 에이전트
 
 - 문체: 친근한 반말~부드러운 존댓말 혼용, 사업 파트너 톤. 한두 문장 위주로 간결하게.
 - 여러 intent가 오면 매끄럽게 연결한다(예: 정정 확인 → 찾은 근거 → 다음 질문).
+- 입력의 recent_messages는 최근 대화 이력이다 — recall intent를 답할 때만 근거로 쓰고, 다른 intent엔 끌어들이지 않는다.
 - intent별 표현 규칙:
   - acknowledge: 사용자의 정정이나 확인을 짧게 받아준다.
   - report_findings: research는 외부 사실, rag는 회사 내부 자료, logic_validator는 claim과 근거 사이의 논리 검증 결과다. 1~2문장으로 전달하고, 사용자 전제와 어긋나면 부드럽게 교정을 제안한다.
   - answer_question: 사용자가 물은 것에 research와 rag가 찾은 답을 전달한다.
+  - recall: 사용자가 직전 대화에 나온 내용을 되묻거나 확인하는 발화. recent_messages(최근 대화 이력)에서 찾아 간결하고 직접적으로 답한다(새 검색·워커 없이). 이력에 없으면 솔직히 모른다고 하고 부드럽게 잇는다.
   - clarify: 모호한 발화를 좁히는 질문을 한다(이게 있으면 보통 ask_slot은 보류된다).
   - redirect: 스코프 밖 발화를 부드럽게 넘기고 본론으로 잇는다.
   - reject_output: 필수 슬롯이 미달이라 지금은 출력이 이르다고 알리고, 무엇을 채우면 되는지 안내한다.
@@ -73,6 +76,7 @@ def _build_intents(state: PlanState) -> list[dict]:
     correction_log = state.get("correction_log") or []
 
     intents: list[dict] = []
+    suppress_ask = False
     next_empty = _next_empty_slot(slots)
 
     # 1) acknowledge — 이번 턴 정정
@@ -86,6 +90,16 @@ def _build_intents(state: PlanState) -> list[dict]:
                     "new": c.get("new"),
                 }
             )
+
+    # 1.2) recall — 되묻기: 워커 없이 대화 이력에서 답(routes=["none"]이라 리포트가 없다)
+    recalls = [
+        (seg.get("canonical_text") or seg.get("text", "")).strip()
+        for seg in segments
+        if "recall" in (seg.get("utterance_types") or []) and seg.get("in_scope", True)
+    ]
+    for subj in [r for r in recalls if r]:
+        intents.append({"type": "recall", "subject": subj})
+        suppress_ask = True  # 되묻기 응답이 곧 답 — 다음 슬롯 질문은 보류
 
     # 1.5) confirm_slot — 애매해서 보류된 주입(있으면 다음 슬롯 질문은 보류)
     pending = state.get("pending_confirmations") or []
@@ -168,7 +182,6 @@ def _build_intents(state: PlanState) -> list[dict]:
             )
 
     # 4) 출력 게이트
-    suppress_ask = False
     if output_request == "type0":
         intents.append({"type": "reject_output", "missing_required": required_missing(state)})
         suppress_ask = True
@@ -218,7 +231,12 @@ def _slot_values(state: PlanState) -> dict:
 async def conversation_node(state: PlanState) -> dict:
     intents = _build_intents(state)
     payload = json.dumps(
-        {"tone": "casual_business", "slots": _slot_values(state), "intents": intents},
+        {
+            "tone": "casual_business",
+            "slots": _slot_values(state),
+            "recent_messages": recent_history(state),
+            "intents": intents,
+        },
         ensure_ascii=False,
     )
     out = await call_json(_SYSTEM, payload, ConversationOut)

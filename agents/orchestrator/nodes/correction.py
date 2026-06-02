@@ -14,7 +14,7 @@ correction_node: utterance_types에 correction 포함 세그먼트만 모아 LLM
   예: 슬롯 target="네이버·카카오" 상태에서 "카카오는 빼자"
       → action: replace target = "네이버" (또는 맥락상 clear)
 
-extract_slot_fills_node: 정정 이후 단계에서, claim/opinion 세그먼트 중
+extract_slot_fills_node: 정정 이후 단계에서, claim 세그먼트 중
   '비어 있는' 슬롯에 들어맞는 값을 골라 채움(이미 찬 슬롯은 안 건드림).
   명확(confidence=clear)하면 즉시 주입하고, 어느 슬롯인지 애매(ambiguous)하면
   주입하지 않고 pending_confirmations에 쌓아 다음 턴 confirm_resolve가 사용자
@@ -176,10 +176,7 @@ async def extract_slot_fills_node(state: PlanState) -> dict:
     candidates = [
         s
         for s in segments
-        if any(
-            t in (s.get("utterance_types") or [])
-            for t in ("claim", "opinion")
-        )
+        if "claim" in (s.get("utterance_types") or [])
     ]
     if not candidates:
         return {}
