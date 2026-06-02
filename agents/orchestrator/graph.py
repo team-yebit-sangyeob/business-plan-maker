@@ -8,8 +8,8 @@
             └ skip 경로             (명확화 우선)
           → gate → conversation → integrator → END
 
-처리 순서·분기는 별도 priority 필드 없이 세그먼트의 routes/utterance_types에서
-직접 파생한다(워커 호출은 routes, 정정 처리는 utterance_types).
+처리 순서와 분기는 별도 priority 필드 없이 세그먼트의 routes/utterance_types에서
+바로 파생한다(워커 호출은 routes, 정정 처리는 utterance_types).
 
 end-to-end trace 예시 (turn 5, "카카오는 빼자. 예산은 1억으로 가자."):
   segment        → [seg1 "카카오는 빼자", seg2 "예산 1억으로 가자"]
