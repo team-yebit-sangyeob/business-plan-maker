@@ -62,6 +62,25 @@ export interface SessionSnapshot {
 // 워커 클러스터 — 어느 에이전트가 냈는지 (백엔드 ValidationReport.cluster와 일치).
 export type ClusterName = "research" | "rag" | "logic_validator";
 
+// score 해석 단위 (백엔드 Citation.score_kind와 일치). none이면 점수 칩 생략.
+export type ScoreKind = "relevance" | "similarity_pct" | "none";
+
+// 구조화 출처 1건 (백엔드 common/schema/state.py Citation와 일치). total=False라 대부분 옵셔널.
+// research=제목·URL·인용문·관련도 / rag=파일·페이지·폴더·하이라이트·원문(raw_source).
+export interface Citation {
+  cluster: ClusterName;
+  title?: string;
+  url?: string;
+  snippet?: string;
+  source_file?: string;
+  page?: string;
+  folder?: string;
+  score?: number;
+  score_kind?: ScoreKind;
+  accessed_at?: string;
+  raw_source?: string; // rag만 — 원문 청크 전체('원문 보기'용)
+}
+
 export type ChatEvent =
   | { type: "token"; text: string }
   | { type: "stage"; node: string; label: string }
@@ -74,6 +93,7 @@ export type ChatEvent =
       findings?: string[];
       sources?: string[];
       agreement?: string;
+      citations?: Citation[];
     }
   | {
       type: "slot_update";
@@ -89,9 +109,11 @@ export interface AgentActivity {
   cluster: ClusterName;
   subject: string;
   status: "running" | "done";
+  startedAt?: number; // agent_start 도착 시각(ms) — 실행 중 경과 초 표시용
   findings?: string[];
   sources?: string[];
   agreement?: string;
+  citations?: Citation[];
 }
 
 // 클러스터별 표시 라벨·뱃지 색 (채팅 활동 UI용).

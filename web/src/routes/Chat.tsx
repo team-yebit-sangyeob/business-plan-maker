@@ -77,12 +77,17 @@ export default function Chat() {
               return { ...m, text: m.text + e.text, currentStage: undefined };
             }
             if (e.type === "agent_start") {
-              // 새 활동 줄을 '실행 중'으로 추가
+              // 새 활동 줄을 '실행 중'으로 추가 (시작 시각 기록 → 경과 초 표시)
               return {
                 ...m,
                 activities: [
                   ...(m.activities ?? []),
-                  { cluster: e.cluster, subject: e.subject, status: "running" },
+                  {
+                    cluster: e.cluster,
+                    subject: e.subject,
+                    status: "running",
+                    startedAt: Date.now(),
+                  },
                 ],
               };
             }
@@ -102,6 +107,7 @@ export default function Chat() {
                 findings: e.findings,
                 sources: e.sources,
                 agreement: e.agreement,
+                citations: e.citations,
               };
               if (idx >= 0) acts[idx] = done;
               else acts.push(done);
@@ -179,7 +185,6 @@ export default function Chat() {
             <div className="font-mono text-[10px] uppercase tracking-wider text-muted-foreground">
               business plan agent
             </div>
-            <h1 className="text-lg font-semibold mt-0.5">대화로 계획서 짜기</h1>
           </div>
           <div className="flex items-center gap-3">
             {!allRequiredFilled && (
