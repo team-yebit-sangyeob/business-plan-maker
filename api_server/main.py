@@ -1,3 +1,4 @@
+"""api_server 진입점 — FastAPI 앱 생성(create_app): 키 fail-fast + CORS + 라우터 결선."""
 from __future__ import annotations
 
 from fastapi import FastAPI

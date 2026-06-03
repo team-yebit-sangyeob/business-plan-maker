@@ -48,6 +48,7 @@ class ConfirmOut(BaseModel):
 
 
 async def confirm_resolve_node(state: PlanState) -> dict:
+    """보류된 확인 1건을 사용자 답으로 해소한다 → {"slots"(주입 시), "pending_confirmations"}(없으면 {})."""
     pending = list(state.get("pending_confirmations") or [])
     if not pending:
         return {}

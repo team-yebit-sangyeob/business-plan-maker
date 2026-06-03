@@ -63,6 +63,8 @@ def _verification_request(
 
 
 async def parallel_dispatch_workers_node(state: PlanState) -> dict:
+    """워커 라우트 세그먼트에 리서치·RAG·논리검증을 디스패치한다 →
+    {"turn_validation_reports","turn_evidence"}(없으면 {})."""
     # worker import는 함수 안에서 — 모듈 로드 시 agents.{research,rag,logic_validator} ↔
     # agents.orchestrator 패키지 순환 import를 피한다(import 순서 의존 크래시 방지).
     from agents.research import run_research

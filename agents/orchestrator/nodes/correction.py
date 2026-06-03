@@ -87,6 +87,7 @@ def _slot_snapshot_lines(state: PlanState) -> str:
 
 
 async def correction_node(state: PlanState) -> dict:
+    """정정 세그먼트를 슬롯에 반영한다 → {"slots","correction_log","turn_segments"}(없으면 {})."""
     segments = state.get("turn_segments") or []
     targets = [s for s in segments if "correction" in (s.get("utterance_types") or [])]
     if not targets:
@@ -193,6 +194,8 @@ class FillOut(BaseModel):
 
 
 async def extract_slot_fills_node(state: PlanState) -> dict:
+    """빈 슬롯에 들어갈 값을 추출해 즉시 주입하거나 확인 큐로 보낸다 →
+    {"slots","turn_segments","pending_confirmations"}(없으면 {})."""
     segments = state.get("turn_segments") or []
     candidates = [
         s

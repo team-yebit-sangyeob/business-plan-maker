@@ -119,6 +119,7 @@ def derive_routes(utterance_types: list[str]) -> list[Route]:
 
 
 async def classify_node(state: PlanState) -> dict:
+    """세그먼트마다 발화 유형·in_scope·routes를 채워 {"turn_segments"}를 갱신한다."""
     segments = list(state.get("turn_segments") or [])
     if not segments:
         return {"turn_segments": []}

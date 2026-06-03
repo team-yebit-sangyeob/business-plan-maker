@@ -1,3 +1,4 @@
+"""POST/GET /session — 세션 생성·조회. PlanState를 프론트 표시용 dict로 직렬화."""
 from __future__ import annotations
 
 from fastapi import APIRouter, HTTPException
@@ -28,12 +29,14 @@ def _serialize_state(state) -> dict:
 
 @router.post("/session")
 def create_session() -> dict:
+    """새 세션을 만들어 session_id와 초기 상태를 돌려준다."""
     sid, state = get_store().create()
     return {"session_id": sid, "state": _serialize_state(state)}
 
 
 @router.get("/session/{session_id}")
 def get_session(session_id: str) -> dict:
+    """세션의 현재 상태를 직렬화해 돌려준다(없으면 404)."""
     state = get_store().get(session_id)
     if state is None:
         raise HTTPException(status_code=404, detail="session not found")

@@ -94,6 +94,7 @@ def _clarify_branch(state: PlanState) -> Literal["dispatch", "gate"]:
 
 @lru_cache(maxsize=1)
 def build_graph():
+    """노드·엣지를 결선한 LangGraph를 컴파일해 돌려준다(프로세스당 1회 캐시)."""
     g: StateGraph = StateGraph(PlanState)
     g.add_node("confirm_resolve", _staged("confirm_resolve", confirm_resolve_node))
     g.add_node("segment", _staged("segment", segment_node))

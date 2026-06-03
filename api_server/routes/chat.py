@@ -116,6 +116,7 @@ def _chunk_text(text: str, size: int = 16):
 
 @router.post("/chat")
 async def chat(req: Annotated[ChatRequest, Body()]):
+    """한 턴을 실행하고 진행·응답·슬롯 변경을 SSE로 스트리밍한다(세션 없으면 404)."""
     if get_store().get(req["session_id"]) is None:
         raise HTTPException(status_code=404, detail="session not found")
     return EventSourceResponse(_stream(req["session_id"], req["text"]))

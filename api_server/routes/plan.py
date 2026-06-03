@@ -25,6 +25,7 @@ class PlanRequest(TypedDict):
 
 @router.post("/plan")
 async def create_plan(req: Annotated[PlanRequest, Body()]):
+    """필수 슬롯 게이트 통과 시 계획서를 합성·저장하고 메타와 다운로드 URL을 돌려준다(미달이면 Type 0 거절)."""
     store = get_store()
     state = store.get(req["session_id"])
     if state is None:
@@ -71,6 +72,7 @@ async def create_plan(req: Annotated[PlanRequest, Body()]):
 
 @router.get("/plan/{plan_id}/download")
 def download_plan(plan_id: str):
+    """저장된 계획서를 PDF 응답으로 내려준다(없으면 404)."""
     meta = get_store().get_pdf(plan_id)
     if not meta:
         raise HTTPException(status_code=404, detail="plan not found")

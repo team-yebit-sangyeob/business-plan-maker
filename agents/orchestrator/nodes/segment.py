@@ -89,6 +89,7 @@ def _slot_snapshot(state: PlanState) -> str:
 
 
 async def segment_node(state: PlanState) -> dict:
+    """발화를 의미 단위로 나누고 맥락을 복원해 {"turn_segments"}를 갱신한다."""
     user_input = state.get("user_input", "")
     if not user_input.strip():
         return {"turn_segments": []}
