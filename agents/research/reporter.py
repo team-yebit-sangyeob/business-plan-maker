@@ -1,4 +1,8 @@
-"""리포터 — 수집 근거 + 원 claim → 하나의 검증 리포트(findings/sources/agreement).
+"""리포터 — 수집 근거 + 원 claim → 검증 리포트의 서술부(findings/agreement).
+
+출처(sources/citations)는 LLM이 다시 받아쓰지 않는다 — searcher가 모은 Evidence(url/title/
+snippet/score)를 research_main이 그대로 구조화 인용으로 만든다(LLM이 URL을 재타이핑하다 위조하는
+경로를 끊어 출처 정확성을 보장). 그래서 리포터는 사람이 읽을 findings와 거친 일치도 플래그만 낸다.
 
 agreement는 findings가 사용자 주장과 표면적으로 맞물리는지를 표시하는 거친 자동
 플래그일 뿐 — 전제→결론 비약 같은 최종 논리 판단은 논리검증이 단독으로 한다.
@@ -16,11 +20,10 @@ _VALID_AGREEMENT = ("confirms", "contradicts", "partial", "unknown")
 
 _REPORTER_SYSTEM = """너는 사실 검증 리포터다.
 
-원래 사용자 주장(claim)과 수집된 근거(evidence)를 받아 하나의 검증 리포트를 작성한다.
+원래 사용자 주장(claim)과 수집된 근거(evidence)를 받아 검증 리포트의 서술부를 작성한다.
 
 [작성 규칙]
 - findings: 근거에서 확인한 핵심 사실을 한국어 bullet 2~5개로 정리한다. 가능하면 구체적인 수치와 기간, 출처 맥락을 담는다.
-- sources: 근거의 출처 URL이나 문서명을 중복 없이 나열한다.
 - agreement: 근거가 claim과 어떻게 맞물리는지를 나타내는 거친 플래그 하나.
     confirms = 근거가 주장을 지지
     contradicts = 근거가 주장과 반대 (예: 사용자는 "포화"라는데 데이터는 성장세)
@@ -28,18 +31,20 @@ _REPORTER_SYSTEM = """너는 사실 검증 리포터다.
     unknown = 근거 부족 또는 무관
   (이건 표면적인 플래그일 뿐, 최종 논리 판단은 논리검증이 한다.)
 - 근거가 비어 있거나 주제와 무관하면 agreement=unknown으로 두고, findings에 "외부 근거 확보 실패"를 명시한다.
+- 출처(URL·문서명)는 적지 마라 — 출처는 코드가 evidence에서 그대로 만든다.
 
 반드시 아래 JSON 형식으로만 출력한다:
-{"findings": ["..."], "sources": ["..."], "agreement": "confirms|contradicts|partial|unknown"}"""
+{"findings": ["..."], "agreement": "confirms|contradicts|partial|unknown"}"""
 
 
 @traceable(name="research.write_report", run_type="chain")
 def write_report(
     client: Any, claim: str, evidence: list[Evidence], *, model: str
 ) -> dict[str, Any]:
-    """근거를 종합해 {findings, sources, agreement} dict를 반환한다 (동기).
+    """근거를 종합해 {findings, agreement} dict를 반환한다 (동기).
 
-    subject·cluster는 호출자(research_main)가 결정적으로 채운다.
+    출처(sources/citations)는 여기서 만들지 않는다 — 호출자(research_main)가 evidence에서
+    구조화 인용을 직접 만든다. subject·cluster도 호출자가 결정적으로 채운다.
     """
     user = (
         f"claim: {claim}\n"
@@ -53,9 +58,8 @@ def write_report(
     data = parse_json_block(resp.output_text)
 
     findings = [str(f).strip() for f in (data.get("findings") or []) if str(f).strip()]
-    sources = [str(s).strip() for s in (data.get("sources") or []) if str(s).strip()]
     agreement = data.get("agreement")
     if agreement not in _VALID_AGREEMENT:
         agreement = "unknown"
 
-    return {"findings": findings, "sources": sources, "agreement": agreement}
+    return {"findings": findings, "agreement": agreement}

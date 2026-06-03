@@ -18,4 +18,5 @@ def stub_report(claim: str, *, error: str | None = None) -> ValidationReport:
         "sources": ["stub://placeholder"],
         "agreement": "unknown",
         "cluster": "research",
+        "citations": [],
     }
