@@ -72,7 +72,7 @@ OPTIONAL_SLOTS = tuple(s for s in ALL_SLOTS if s not in REQUIRED_SLOTS)
   - 처리 순서·그래프 분기는 **별도 priority 필드 없이** `routes`/`utterance_types`에서 직접 파생한다 — 워커 호출·디스패치 분기는 `routes`(워커 라우트 유무), 정정 처리는 `utterance_types`(`"correction"` 포함 여부).
   - `in_scope`: 사업 계획과 관련 있는 발화인가. False면 classify가 `routes=["none"]`로 막고 conversation이 `redirect` intent로 부드럽게 넘긴다. 기본 True.
   - 주장을 어떻게 분해·검증할지(검증 강도, 전제 vs 결론)는 **오케가 정하지 않는다** — 리서치 클러스터의 쿼리 분해기 몫.
-- `ValidationReport`: `{subject, findings[], sources[], agreement, cluster}`, `cluster ∈ research/rag/logic_validator`.
+- `ValidationReport`: `{subject, findings[], sources[], agreement, cluster, citations[]}`, `cluster ∈ research/rag/logic_validator`. `citations`=제목·URL·인용문·페이지·관련도(·사내문서 `raw_source`)까지 보존한 구조화 출처(SSE로 그대로 발행).
 - `Correction`: `{slot, previous, new, turn}` — 정정 이력.
 
 ### PlanState
@@ -195,18 +195,24 @@ dispatch 경로에서만 실행 (그래프상 dispatch 다음). **비어있는 �
 
 **2단계 디스패치** (리서치·RAG 병렬 → 논리검증 후속):
 ```python
-# 1단계: 외부 사실 + 회사 문서 — 전 세그먼트 병렬
-research → run_research(subject) → report              # asyncio.gather; report를 idx로 보관
+# 1단계: 외부 사실 + 회사 문서 — 전 세그먼트 병렬, 먼저 끝난 워커부터 발행
+research → run_research(subject) → report              # asyncio.as_completed; report를 idx로 보관
 rag      → run_rag_check(subject) → (report, rag_result)
-# 2단계: 논리검증 — 같은 세그먼트의 1단계 RAG 산출물 + (claim이면) research report를 입력으로
-logic_validator → run_logic_validator(subject, rag_result, research_report)   # asyncio.gather
+#   완료 즉시 emit(validation_report); 반환 리스트는 디스패치 순서로 재구성(결정론)
+# 2단계: 논리검증 — 1단계 전체 완료 뒤(배리어), 같은 세그먼트의 RAG 산출물 + (claim이면) research report를 입력으로
+logic_validator → run_logic_validator(subject, rag_result, research_report)   # asyncio.as_completed
 ```
 > **왜 2단계인가** — `logic_validator`(validator 엔진)는 RAG가 회수한 근거(highlight·raw_source)가
 > claim을 논리적으로 지지하는지 판정하므로, 1단계 RAG 산출물 `RagExtractorResult`가 먼저 있어야
 > 한다. RAG는 `(ValidationReport, RagExtractorResult)`를 돌려주고 dispatch가 그 원본을 2단계로
-> 넘긴다(프론트엔 ValidationReport만 발행 — raw_source 등 대용량 제외). 매트릭스상 logic_validator는
-> 항상 rag와 동반하므로 입력 근거는 늘 존재하며, RAG가 근거를 못 찾으면(`rag_result=None`) "근거
-> 없음"으로 흐른다.
+> 넘긴다(프론트엔 ValidationReport만 발행 — 단 사내 원문은 `report.citations`의 `raw_source`로 전달).
+> 매트릭스상 logic_validator는 항상 rag와 동반하므로 입력 근거는 늘 존재하며, RAG가 근거를 못
+> 찾으면(`rag_result=None`) "근거 없음"으로 흐른다.
+>
+> **발행은 완료순, 반환은 디스패치순** — 1단계는 `asyncio.as_completed`로 먼저 끝난 워커(웹/사내문서)의
+> 결과 카드부터 발행해 사용자가 둘 다 끝나길 기다리지 않게 한다. 다만 `turn_validation_reports`·
+> `turn_evidence`는 등장 순서로 되돌려 다운스트림을 결정론으로 유지한다(`session_evidence` 누적은
+> `(subject,cluster)` 중복 제거라 순서 무관).
 >
 > **research 보조 근거 통합**: claim 세그먼트에선 같은 세그먼트의 1단계 research 결과(findings·sources)를
 > 텍스트로 묶어 보조 근거로 함께 넘긴다. validator는 `research_evidence`(Optional[str]) 인자로 하위호환
