@@ -7,10 +7,11 @@ from __future__ import annotations
 
 import json
 import logging
-import os
 from typing import TypeVar
 
 from pydantic import BaseModel, ValidationError
+
+from common.config import orchestrator_model, require_openai_key
 
 
 logger = logging.getLogger(__name__)
@@ -23,15 +24,11 @@ async def call_json(system: str, user: str, schema: type[T]) -> T:
 
     키가 없으면 RuntimeError. 응답 JSON이 스키마에 안 맞으면 1회 재시도 후 실패한다.
     """
-    if not os.environ.get("OPENAI_API_KEY"):
-        raise RuntimeError(
-            "OPENAI_API_KEY가 없습니다 — 이 앱은 키 없이 실행되지 않습니다. "
-            ".env에 OPENAI_API_KEY를 넣으세요."
-        )
+    require_openai_key("app")
 
     from langchain_openai import ChatOpenAI
 
-    model_name = os.environ.get("BPM_LLM_MODEL", "gpt-5-mini")
+    model_name = orchestrator_model()
     llm = ChatOpenAI(
         model=model_name,
         temperature=0,

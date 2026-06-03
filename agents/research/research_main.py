@@ -11,9 +11,9 @@ from __future__ import annotations
 
 import asyncio
 import logging
-import os
 from typing import Any
 
+from common.config import openai_api_key, research_model
 from common.schema import Citation, ValidationReport, VerificationRequest
 from agents.research.stub import stub_report
 from agents.research.decomposer import decompose
@@ -24,7 +24,7 @@ from agents.research._util import today_iso, traceable
 
 logger = logging.getLogger(__name__)
 
-MODEL = os.getenv("OPENAI_MODEL", "gpt-5.4-mini")
+MODEL = research_model()
 
 _DEFAULT_FRESHNESS_DAYS = 180
 
@@ -33,7 +33,7 @@ def _make_client() -> Any:
     """OpenAI 클라이언트. LangSmith가 있으면 wrap_openai로 감싸 호출을 트레이스에 남긴다."""
     from openai import OpenAI
 
-    client = OpenAI(api_key=os.getenv("OPENAI_API_KEY"))
+    client = OpenAI(api_key=openai_api_key())
     try:
         from langsmith.wrappers import wrap_openai
 
