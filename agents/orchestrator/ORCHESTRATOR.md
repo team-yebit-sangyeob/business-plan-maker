@@ -45,7 +45,7 @@ OPTIONAL_SLOTS = tuple(s for s in ALL_SLOTS if s not in REQUIRED_SLOTS)
 > **필수 ≠ 먼저 질문.** `goal`은 필수(게이트 조건)지만 질문은 7번째 — 솔루션·수익모델을 모르면 측정 가능한 목표가 안 나오므로 일부러 늦췄다. "필수냐"(게이트 멤버십)와 "몇 번째로 묻느냐"(질문 순서)를 분리.
 > `advantage`(차별점·경쟁우위)는 기획서 9슬롯 외에 도메인 보강으로 추가한 슬롯 — "왜 우리인가".
 
-**슬롯 정의의 단일 원천 = `SLOT_SPECS`** (`state.py`). 각 슬롯에 `{title, definition, boundary, question}`을 두고, `slot_guide_text()`가 이를 `"- solution (솔루션): <정의> | 경계: <경계규칙>"` 한 블록으로 렌더한다. **segment·extract_slot_fills·correction 프롬프트가 모두 이 한 함수를 임베드**해 같은 정의·경계를 공유한다(예전엔 정의가 네 곳에 흩어져 같은 내용이 호출마다 다른 슬롯에 들어가곤 했다). `boundary`("이건 여기 NOT 저기")는 헷갈리는 이웃 슬롯 경계를 못박은 것 — `solution↔revenue`(무엇을 만드나 vs 어떻게 버나), `goal↔revenue`(목표 수치 vs 과금 방식), `market↔advantage`(경쟁사 데이터 vs 우리 우위) 등 8쌍. 이 경계는 동시에 fill이 "한 슬롯에 깔끔히 안 떨어지면 `ambiguous`로 보류"하는 판정 근거가 된다(§3.4). 도구·슬롯 메타질문(`tool_help`)의 응답도 같은 `SLOT_SPECS`에서 `tool_help_text()`로 렌더한다(`APP_OVERVIEW`는 도구 전체 설명) — 슬롯 설명이 또 갈리지 않게 단일 원천을 공유한다.
+**슬롯 정의의 단일 원천 = `SLOT_SPECS`** (`state.py`). 각 슬롯에 `{title, definition, boundary, question}`을 두고, `slot_guide_text()`가 이를 `"- solution (솔루션): <정의> | 경계: <경계규칙>"` 한 블록으로 렌더한다. **segment·extract_slot_fills·correction 프롬프트가 모두 이 한 함수를 임베드**해 같은 정의·경계를 공유한다(예전엔 정의가 네 곳에 흩어져 같은 내용이 호출마다 다른 슬롯에 들어가곤 했다). `boundary`("이건 여기 NOT 저기")는 헷갈리는 이웃 슬롯 경계를 못박은 것 — `solution↔revenue`(무엇을 만드나 vs 어떻게 버나), `goal↔revenue`(목표 수치 vs 과금 방식), `market↔advantage`(경쟁사 데이터 vs 우리 우위) 등 8쌍. 이 경계는 동시에 fill이 "한 슬롯에 깔끔히 안 떨어지면 `ambiguous`로 보류"하는 판정 근거가 된다(§3.4). 도구·슬롯 메타질문(`tool_help`)의 응답도 같은 `SLOT_SPECS`에서 렌더한다 — `tool_help_text()`가 `APP_OVERVIEW`+슬롯 정의(제목·정의·경계) 전부를 한 덩이 '참고 자료'(body)로 묶고, conversation은 사용자 질문(subject)과 그 body만 받는다. **어느 슬롯을 얼마나 답할지(특정 1개/여럿/전체/개요)는 코드가 키워드로 가르지 않고 LLM이 질문에 맞춰 정한다** — 라우팅(워커 호출)이 아니라 표현 결정이라 LLM 몫이다. 슬롯 설명이 또 갈리지 않게 단일 원천을 공유한다.
 
 각 `Slot` = `{value, source_label, status}`.
 - `source_label` ∈ `SourceLabel` (`common/schema/labels.py`): `user / research / empty` (3종)
@@ -59,7 +59,7 @@ OPTIONAL_SLOTS = tuple(s for s in ALL_SLOTS if s not in REQUIRED_SLOTS)
 > classify가 세그먼트를 **먼저 interaction인지 content인지** 가른다 — 되묻기·진행신호처럼 말의 행위가 핵심인 발화가, 안에 낀 검증가능한 명제 때문에 claim으로 끌려가 워커가 발동하던 문제를 막는다.
 > `claim`은 사실·가설·결정·제약·**근거 있는 가치판단**을 한 유형으로 묶는다 — 라우팅이 동일(research+rag+logic_validator)하기 때문(구 `opinion` 흡수: 라우팅 차이가 research 발동뿐이라 분리 가치 없음). 주장을 어떻게 분해·검증할지는 **오케가 아니라 리서치 쿼리 분해기**가 정한다.
 > `recall`(되묻기)은 [최근 대화]에 이미 나온 걸 다시 묻는 발화 — 워커 없이 conversation이 대화 이력에서 답한다.
-> `tool_help`는 도구·슬롯·사용법 자체를 묻는 메타질문("솔루션 슬롯이 뭐야?", "넌 뭐 할 수 있어?") — 워커 없이 conversation이 `SLOT_SPECS`·`APP_OVERVIEW`에서 `explain_tool`로 답한다. classify가 interaction 라벨을 content와 섞어 줘도 코드(interaction-precedence)가 content를 떨궈 워커를 막는다. "솔루션 슬롯이 뭐야(도구 설명)"가 `question`으로 끌려가 리서치를 돌리던 문제를 막는다.
+> `tool_help`는 도구·슬롯·사용법 자체를 묻는 메타질문("솔루션 슬롯이 뭐야?", "각 슬롯의 역할?", "넌 뭐 할 수 있어?") — 워커 없이 conversation이 `SLOT_SPECS`·`APP_OVERVIEW`에서 `explain_tool`로 답한다(슬롯 정의 전체를 재료로 주고 답변 범위는 LLM이 질문에 맞춘다 — 코드가 스코프를 정하지 않음). classify가 interaction 라벨을 content와 섞어 줘도 코드(interaction-precedence)가 content를 떨궈 워커를 막는다. "솔루션 슬롯이 뭐야(도구 설명)"가 `question`으로 끌려가 리서치를 돌리던 문제를 막는다.
 > 세그먼트마다 `in_scope`(계획 관련 여부)도 함께 매겨, false면 워커를 막고 부드럽게 리다이렉트.
 
 ### 라우트 (`Route`)
@@ -184,7 +184,7 @@ dispatch 경로에서만 실행 (그래프상 dispatch 다음). **비어있는 �
 - 후보 = `claim` 라벨 가진 세그먼트. 빈 슬롯 없으면 LLM 호출 안 함 (비용 절약).
 - `_FILL_SYSTEM`에 `slot_guide_text()` + **`[직전 대화]`(recent_history)** 임베드. LLM은 fill마다 `{slot, value, kind(decision|exploration), confidence(clear|ambiguous), alt_slots[], reason}` 반환. 두 축을 가린다 — `kind`(사용자가 그 값을 **결정**했나)와 `confidence`(**어느 슬롯**인지 명확한가).
 - `kind=decision` 기준: (a) 명시적 확정("X로 하자/가자/정했어") 또는 (b) 직전에 어시스턴트가 물은 슬롯 질문에 직접 답함. 단순 탐색·가설("X가 좋을 것 같은데", "X는 어때?")은 `exploration`. 애매하면 `exploration`.
-- (b)는 **결정론 안전망**으로 보강한다 — `conversation_node`가 `ask_slot`을 물 때 `last_asked_slot`을 기록하고, fill은 그 슬롯에 대한 답이면 LLM이 보수적으로 `exploration`을 줘도 `decision`으로 승격한다(정상 슬롯 답변이 확인 질문으로 새는 과차단 방지 — gpt-5-mini가 짧은 명사구 답을 탐색으로 보는 경향을 막는다).
+- (b)는 **결정론 안전망**으로 보강한다 — `conversation_node`가 `ask_slot`을 물 때 `last_asked_slot`을 기록하고, fill은 그 슬롯에 대한 답이면 LLM이 보수적으로 `exploration`을 줘도 `decision`으로 승격한다(정상 슬롯 답변이 확인 질문으로 새는 과차단 방지 — mini 추론 모델이 짧은 명사구 답을 탐색으로 보는 경향을 막는다).
 - 쓰기 게이트 **세 갈래**:
   - **결정 + 슬롯 명확** → 빈 슬롯에 즉시 주입(`source_label=USER`). 이미 찬 슬롯은 correction_node 담당.
   - **결정 + 슬롯 애매**(`ambiguous` 또는 `alt_slots`) → 주입하지 않고 `pending_confirmations`(`confirm_kind="slot"`)에 쌓음(후보 중 빈 슬롯이 하나도 없으면 스킵). 다음 턴 `confirm_resolve`가 "어느 슬롯?" 답으로 확정.
@@ -267,12 +267,13 @@ state에서 **intent 목록을 결정론으로 뽑아**(`_build_intents`) **LLM 
 
 ## 4. LLM 호출 헬퍼 (`llm.py`)
 
-모든 LLM 노드는 `call_json(system, user, schema)` 하나만 부른다. **mock/live 모드 분기는 없다** —
+모든 LLM 노드는 `call_json(system, user, schema, *, reasoning_effort=None)` 하나만 부른다. **mock/live 모드 분기는 없다** —
 `OPENAI_API_KEY`가 없으면 `call_json`이 즉시 `RuntimeError`를 던지고 `api_server`도 기동 시점에
 거부한다(fail-fast). 키가 있으면 항상 실 호출.
 - `langchain-openai ChatOpenAI`의 **`with_structured_output(schema, method="function_calling")`** 가 스키마 변환·함수콜 강제·파싱·pydantic 검증을 한 번에 한다 — 예전의 수동 스키마 주입+`json.loads`+`model_validate`+수동 1회 재시도를 대체(LangChain doc가 권하는 구조화 출력 idiom). `method="function_calling"`은 Optional·default·중첩 필드 많은 스키마에 안전한 드롭인(strict `json_schema`는 그 제약과 충돌 위험).
 - 전이 오류(429·timeout·5xx) 재시도는 그래프 노드의 `RetryPolicy`가 일원화한다(§2) — `call_json` 자체엔 재시도를 두지 않는다. (planner의 호출은 그래프 밖이라 전이 오류가 그대로 전파되지만, 예전 루프도 검증 오류만 잡았을 뿐 전이 오류는 전파했다 — 동작 동일.)
-- 모델 교체: `BPM_LLM_MODEL`(오케스트레이터), `OPENAI_MODEL`(리서치/RAG).
+- **추론 강도**: 기본 모델 `gpt-5.4-mini`는 추론 모델이라 `reasoning_effort` 미설정이면 서버 기본(=medium) 추론으로 돌아 한 턴의 순차 호출(segment·classify·gate·conversation 등)이 수십 초로 쌓인다. `BPM_LLM_REASONING`(기본 `low`)으로 추론 강도를 낮춰 지연을 줄인다 — `call_json`이 추론 모델(`gpt-5`·`o`계열, `chat` 제외)일 때만 `ChatOpenAI`에 `reasoning_effort`로 넘기고, 비추론 모델엔 넘기지 않는다(`gpt-5` 비-chat은 langchain-openai가 `temperature`를 자동 제거). 노드별로 더 낮추고 싶으면 `call_json(..., reasoning_effort="minimal")` 인자로 덮는다.
+- 모델 교체: `BPM_LLM_MODEL`(오케스트레이터, 기본 `gpt-5.4-mini`), `OPENAI_MODEL`(리서치/RAG, 기본 `gpt-5.4-mini`). 추론 강도: `BPM_LLM_REASONING`(기본 `low`).
 - 오케스트레이터·리서치 진입·검색 프로바이더의 env 읽기는 `common/config.py` 명명 접근자
   (`orchestrator_model`·`require_openai_key`·`search_provider` 등)로 모은다 — 이 호출부는
   `os.environ`을 직접 읽지 않는다. (rag·validator 워커는 아직 `OPENAI_MODEL`·`OPENAI_API_KEY`를
