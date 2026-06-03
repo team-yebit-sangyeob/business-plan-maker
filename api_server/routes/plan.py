@@ -1,4 +1,8 @@
-"""POST /plan — 명시적 트리거 (12장). 동기 REST: planner stub → pdf_renderer stub."""
+"""POST /plan — 명시적 트리거 (12장). async REST: planner(하이브리드) → pdf_renderer stub.
+
+planner가 서술 1회를 위해 LLM(call_json, async)을 부르므로 라우트도 async다 — sync 라우트에서
+asyncio.run을 중첩하는 함정을 피한다. compose_markdown은 LLM이 죽어도 결정론 골격으로 폴백한다.
+"""
 from __future__ import annotations
 
 import uuid
@@ -20,7 +24,7 @@ class PlanRequest(TypedDict):
 
 
 @router.post("/plan")
-def create_plan(req: Annotated[PlanRequest, Body()]):
+async def create_plan(req: Annotated[PlanRequest, Body()]):
     store = get_store()
     state = store.get(req["session_id"])
     if state is None:
@@ -38,7 +42,7 @@ def create_plan(req: Annotated[PlanRequest, Body()]):
             },
         )
 
-    markdown = compose_markdown(state)
+    markdown = await compose_markdown(state)
     rendered = render_pdf(markdown)
 
     plan_id = uuid.uuid4().hex[:10]
