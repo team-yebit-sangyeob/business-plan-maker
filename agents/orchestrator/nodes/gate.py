@@ -60,7 +60,7 @@ async def detect_output_request(state: PlanState) -> bool:
 
 
 async def gate_node(state: PlanState) -> dict:
-    """출력 의도를 판정하고 Type 0/1/2를 결정한다 → {"output_request"}(출력 요청 시 pending 큐 비움)."""
+    """출력 의도를 판정하고 Type 0/1/2를 결정한다 → {"output_request"(, 출력 요청 시 "pending_confirmations": [] — 보류 큐 비움)}."""
     wants_output = await detect_output_request(state)
     if not wants_output:
         return {"output_request": None}

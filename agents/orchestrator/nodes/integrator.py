@@ -14,7 +14,7 @@ from common.schema import PlanState
 
 
 def response_integrator_node(state: PlanState) -> dict:
-    """이번 턴 명확화(clarify) 대상만 추려 기록한다 → {"pending_clarifications"}(LLM 없음)."""
+    """이번 턴 명확화(clarify) 대상만 추려 기록한다 → {"pending_clarifications"}(디버깅·세션 표시용, LLM 없음)."""
     segments = state.get("turn_segments") or []
     clarifications = [
         text

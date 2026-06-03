@@ -1,4 +1,5 @@
-"""POST /chat — SSE 스트리밍. Orchestrator 그래프 한 턴 실행 후 이벤트들을 차례로 emit."""
+"""POST /chat — SSE 스트리밍. 그래프 실행 도중 에이전트 활동(agent_start·validation_report)을
+실시간으로 흘리고, 끝나면 응답 토큰·슬롯 변경·done을 순서대로 보낸다."""
 from __future__ import annotations
 
 import asyncio
@@ -121,7 +122,7 @@ def _chunk_text(text: str, size: int = 16):
 
 @router.post("/chat")
 async def chat(req: Annotated[ChatRequest, Body()]):
-    """한 턴을 실행하고 진행·응답·슬롯 변경을 SSE로 스트리밍한다(세션 없으면 404)."""
+    """한 턴을 실행하고 진행·응답·슬롯 변경을 SSE로 스트리밍한다(진입 시 세션 없으면 404)."""
     if get_store().get(req["session_id"]) is None:
         raise HTTPException(status_code=404, detail="session not found")
     return EventSourceResponse(_stream(req["session_id"], req["text"]))

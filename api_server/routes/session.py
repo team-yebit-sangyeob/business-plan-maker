@@ -29,7 +29,7 @@ def _serialize_state(state) -> dict:
 
 @router.post("/session")
 def create_session() -> dict:
-    """새 세션을 만들어 session_id와 초기 상태를 돌려준다."""
+    """새 세션을 만들어 {session_id, 직렬화된 초기 상태(state)}를 돌려준다."""
     sid, state = get_store().create()
     return {"session_id": sid, "state": _serialize_state(state)}
 

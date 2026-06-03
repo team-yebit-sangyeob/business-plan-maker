@@ -231,7 +231,7 @@ def _slot_values(state: PlanState) -> dict:
 
 
 async def conversation_node(state: PlanState) -> dict:
-    """결정론 intent 목록을 자연어 한 응답으로 엮는다 → {"pending_question"}(ask_slot 시 last_asked_slot)."""
+    """결정론 intent 목록을 자연어 한 응답으로 엮는다 → {"pending_question"(+ ask_slot을 실제로 물은 턴엔 "last_asked_slot": 물은 슬롯)}."""
     intents = _build_intents(state)
     payload = json.dumps(
         {
