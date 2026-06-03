@@ -45,7 +45,7 @@ OPTIONAL_SLOTS = tuple(s for s in ALL_SLOTS if s not in REQUIRED_SLOTS)
 > **필수 ≠ 먼저 질문.** `goal`은 필수(게이트 조건)지만 질문은 7번째 — 솔루션·수익모델을 모르면 측정 가능한 목표가 안 나오므로 일부러 늦췄다. "필수냐"(게이트 멤버십)와 "몇 번째로 묻느냐"(질문 순서)를 분리.
 > `advantage`(차별점·경쟁우위)는 기획서 9슬롯 외에 도메인 보강으로 추가한 슬롯 — "왜 우리인가".
 
-**슬롯 정의의 단일 원천 = `SLOT_SPECS`** (`state.py`). 각 슬롯에 `{title, definition, boundary, question}`을 두고, `slot_guide_text()`가 이를 `"- solution (솔루션): <정의> | 경계: <경계규칙>"` 한 블록으로 렌더한다. **segment·extract_slot_fills·correction 프롬프트가 모두 이 한 함수를 임베드**해 같은 정의·경계를 공유한다(예전엔 정의가 네 곳에 흩어져 같은 내용이 호출마다 다른 슬롯에 들어가곤 했다). `boundary`("이건 여기 NOT 저기")는 헷갈리는 이웃 슬롯 경계를 못박은 것 — `solution↔revenue`(무엇을 만드나 vs 어떻게 버나), `goal↔revenue`(목표 수치 vs 과금 방식), `market↔advantage`(경쟁사 데이터 vs 우리 우위) 등 8쌍. 이 경계는 동시에 fill이 "한 슬롯에 깔끔히 안 떨어지면 `ambiguous`로 보류"하는 판정 근거가 된다(§3.4). 도구·슬롯 메타질문(`tool_help`)의 응답도 같은 `SLOT_SPECS`에서 `tool_help_text(slot, scope)`로 렌더한다 — `conversation`의 `_help_scope`가 발화를 셋으로 가른다: 특정 슬롯 1개(`slot`)는 그 슬롯의 정의·경계·질문 톤, **각/모든 슬롯**(`all`, "각 슬롯의 역할?")은 10개 슬롯의 `제목: 정의`를 빠짐없이, 도구 일반(`general`, "넌 뭐 할 수 있어?")은 `APP_OVERVIEW`+슬롯 제목. 슬롯 설명이 또 갈리지 않게 단일 원천을 공유한다.
+**슬롯 정의의 단일 원천 = `SLOT_SPECS`** (`state.py`). 각 슬롯에 `{title, definition, boundary, question}`을 두고, `slot_guide_text()`가 이를 `"- solution (솔루션): <정의> | 경계: <경계규칙>"` 한 블록으로 렌더한다. **segment·extract_slot_fills·correction 프롬프트가 모두 이 한 함수를 임베드**해 같은 정의·경계를 공유한다(예전엔 정의가 네 곳에 흩어져 같은 내용이 호출마다 다른 슬롯에 들어가곤 했다). `boundary`("이건 여기 NOT 저기")는 헷갈리는 이웃 슬롯 경계를 못박은 것 — `solution↔revenue`(무엇을 만드나 vs 어떻게 버나), `goal↔revenue`(목표 수치 vs 과금 방식), `market↔advantage`(경쟁사 데이터 vs 우리 우위) 등 8쌍. 이 경계는 동시에 fill이 "한 슬롯에 깔끔히 안 떨어지면 `ambiguous`로 보류"하는 판정 근거가 된다(§3.4). 도구·슬롯 메타질문(`tool_help`)의 응답도 같은 `SLOT_SPECS`에서 렌더한다 — `tool_help_text()`가 `APP_OVERVIEW`+슬롯 정의(제목·정의·경계) 전부를 한 덩이 '참고 자료'(body)로 묶고, conversation은 사용자 질문(subject)과 그 body만 받는다. **어느 슬롯을 얼마나 답할지(특정 1개/여럿/전체/개요)는 코드가 키워드로 가르지 않고 LLM이 질문에 맞춰 정한다** — 라우팅(워커 호출)이 아니라 표현 결정이라 LLM 몫이다. 슬롯 설명이 또 갈리지 않게 단일 원천을 공유한다.
 
 각 `Slot` = `{value, source_label, status}`.
 - `source_label` ∈ `SourceLabel` (`common/schema/labels.py`): `user / research / empty` (3종)
@@ -59,7 +59,7 @@ OPTIONAL_SLOTS = tuple(s for s in ALL_SLOTS if s not in REQUIRED_SLOTS)
 > classify가 세그먼트를 **먼저 interaction인지 content인지** 가른다 — 되묻기·진행신호처럼 말의 행위가 핵심인 발화가, 안에 낀 검증가능한 명제 때문에 claim으로 끌려가 워커가 발동하던 문제를 막는다.
 > `claim`은 사실·가설·결정·제약·**근거 있는 가치판단**을 한 유형으로 묶는다 — 라우팅이 동일(research+rag+logic_validator)하기 때문(구 `opinion` 흡수: 라우팅 차이가 research 발동뿐이라 분리 가치 없음). 주장을 어떻게 분해·검증할지는 **오케가 아니라 리서치 쿼리 분해기**가 정한다.
 > `recall`(되묻기)은 [최근 대화]에 이미 나온 걸 다시 묻는 발화 — 워커 없이 conversation이 대화 이력에서 답한다.
-> `tool_help`는 도구·슬롯·사용법 자체를 묻는 메타질문("솔루션 슬롯이 뭐야?", "각 슬롯의 역할?", "넌 뭐 할 수 있어?") — 워커 없이 conversation이 `SLOT_SPECS`·`APP_OVERVIEW`에서 `explain_tool`로 답한다(스코프 slot/all/general은 `_help_scope`가 가른다). classify가 interaction 라벨을 content와 섞어 줘도 코드(interaction-precedence)가 content를 떨궈 워커를 막는다. "솔루션 슬롯이 뭐야(도구 설명)"가 `question`으로 끌려가 리서치를 돌리던 문제를 막는다.
+> `tool_help`는 도구·슬롯·사용법 자체를 묻는 메타질문("솔루션 슬롯이 뭐야?", "각 슬롯의 역할?", "넌 뭐 할 수 있어?") — 워커 없이 conversation이 `SLOT_SPECS`·`APP_OVERVIEW`에서 `explain_tool`로 답한다(슬롯 정의 전체를 재료로 주고 답변 범위는 LLM이 질문에 맞춘다 — 코드가 스코프를 정하지 않음). classify가 interaction 라벨을 content와 섞어 줘도 코드(interaction-precedence)가 content를 떨궈 워커를 막는다. "솔루션 슬롯이 뭐야(도구 설명)"가 `question`으로 끌려가 리서치를 돌리던 문제를 막는다.
 > 세그먼트마다 `in_scope`(계획 관련 여부)도 함께 매겨, false면 워커를 막고 부드럽게 리다이렉트.
 
 ### 라우트 (`Route`)
