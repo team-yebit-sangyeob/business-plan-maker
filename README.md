@@ -40,7 +40,8 @@ cp .env.example .env
 | 변수 | 설명 |
 |---|---|
 | `OPENAI_API_KEY` | **필수.** 없으면 서버가 기동되지 않는다(mock/키리스 경로 없음). |
-| `BPM_LLM_MODEL` | 오케스트레이터 모델 ID (예: `gpt-5-mini` / `gpt-4o-mini` / `gpt-4.1-mini`). |
+| `BPM_LLM_MODEL` | 오케스트레이터 모델 ID. 미설정 시 `gpt-5.4-mini`. |
+| `BPM_LLM_REASONING` | 오케스트레이터 추론 강도(추론 모델만 적용 — 지연↓). 미설정 시 `low`. |
 | `OPENAI_MODEL` | 리서치/RAG 에이전트 모델(Responses API). 미설정 시 `gpt-5.4-mini`. |
 | `TAVILY_API_KEY` | 리서치 웹 검색용. 없으면 리서치는 폴백 처리된다. |
 | `DOCS_BASE_PATH` / `DIRECTORY_MAP_PATH` | 회사 RAG 벡터DB 경로(`vector_db_store/`). |
