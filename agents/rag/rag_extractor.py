@@ -191,11 +191,11 @@ def _filter_irrelevant_chunks(
     :return: (kept_chunks, dropped_chunks)
     """
     system_prompt = (
-        "당신은 RAG 관련성 필터입니다. "
-        "주어진 claim과 keywords에 비추어 각 청크가 주제적으로 관련이 있는지 판단하세요. "
+        "너는 RAG 관련성 필터다. "
+        "주어진 claim과 keywords에 비추어 각 청크가 주제적으로 관련이 있는지 판단한다. "
         "청크가 claim의 근거 또는 반증으로 사용될 수 있으면 \"relevant\", "
-        "그렇지 않으면 \"irrelevant\"로 분류하세요. "
-        "반드시 아래 JSON 배열 형식으로만 출력하세요:\n"
+        "그렇지 않으면 \"irrelevant\"로 분류한다. "
+        "반드시 아래 JSON 배열 형식으로만 출력한다:\n"
         "[{\"index\": 0, \"verdict\": \"relevant\", \"reason\": \"이유\"}, ...]"
     )
     chunk_list = [
@@ -250,7 +250,7 @@ FOLDER_ROUTER_TOOLS = [
     {
         "type": "function",
         "name": "read_directory_map",
-        "description": "벡터DB 폴더 구조와 각 폴더 설명, 신뢰도 계층(paper>report>proposal>etc)을 읽어옵니다.",
+        "description": "벡터DB 폴더 구조와 각 폴더 설명, 신뢰도 계층(paper>report>proposal>etc)을 읽어온다.",
         "parameters": {
             "type": "object",
             "properties": {},
@@ -265,9 +265,9 @@ SEARCH_HIGHLIGHT_TOOLS = [
         "type": "function",
         "name": "search_vector_db",
         "description": (
-            "지정 폴더의 Chroma DB에서 keyword로 청크를 검색합니다. "
-            f"{MIN_CHUNK_LEN}자 미만 청크는 자동 제외되며, LLM 관련성 필터도 적용됩니다. "
-            "valid_count=0이거나 결과가 부족하면 다른 keyword나 folder로 재호출하세요."
+            "지정 폴더의 Chroma DB에서 keyword로 청크를 검색한다. "
+            f"{MIN_CHUNK_LEN}자 미만 청크는 자동 제외되며, LLM 관련성 필터도 적용된다. "
+            "valid_count=0이거나 결과가 부족하면 다른 keyword나 folder로 재호출한다."
         ),
         "parameters": {
             "type": "object",
@@ -283,12 +283,12 @@ SEARCH_HIGHLIGHT_TOOLS = [
                 },
                 "claim": {
                     "type": "string",
-                    "description": "관련성 필터에 사용할 원본 claim 문장. 항상 입력 claim을 그대로 전달하세요.",
+                    "description": "관련성 필터에 사용할 원본 claim 문장. 항상 입력 claim을 그대로 전달한다.",
                 },
                 "keywords": {
                     "type": "array",
                     "items": {"type": "string"},
-                    "description": "관련성 필터에 사용할 키워드 목록. 항상 입력 keywords를 그대로 전달하세요.",
+                    "description": "관련성 필터에 사용할 키워드 목록. 항상 입력 keywords를 그대로 전달한다.",
                 },
                 "min_len": {
                     "type": "integer",
@@ -415,14 +415,14 @@ def _run_agent(
 
 # ─── Agent 1: ClaimExtractorAgent ──────────────────────────────────────────────
 
-_CLAIM_EXTRACTOR_SYSTEM = """당신은 claim 추출 전문가입니다.
+_CLAIM_EXTRACTOR_SYSTEM = """너는 claim 추출 전문가다.
 
-입력된 qk(원문 주장/지식)를 분석하여 다음을 수행하세요.
+입력된 qk(원문 주장/지식)를 분석하여 다음을 수행한다.
 
-1. 검색에 적합하게 정제된 핵심 claim을 작성하세요 (원문의 핵심 주장을 명확한 서술문으로)
-2. claim을 잘 반영하는 한국어 검색 키워드 3개를 추출하세요 (구체적이고 검색에 효과적인 단어)
+1. 검색에 적합하게 정제된 핵심 claim을 작성한다 (원문의 핵심 주장을 명확한 서술문으로)
+2. claim을 잘 반영하는 한국어 검색 키워드 3개를 추출한다 (구체적이고 검색에 효과적인 단어)
 
-반드시 아래 JSON 형식으로만 출력하세요:
+반드시 아래 JSON 형식으로만 출력한다:
 {
   "claim": "정제된 핵심 주장 문장",
   "keywords": ["키워드1", "키워드2", "키워드3"]
@@ -471,17 +471,17 @@ def run_claim_extractor_agent(
 
 # ─── Agent 2: FolderRouterAgent ─────────────────────────────────────────────────
 
-_FOLDER_ROUTER_SYSTEM = """당신은 RAG 검색 폴더 라우터입니다.
+_FOLDER_ROUTER_SYSTEM = """너는 RAG 검색 폴더 라우터다.
 
-입력된 claim과 keywords를 분석하여 어느 폴더에서 검색할지 결정하세요.
-반드시 read_directory_map 툴을 호출하여 폴더 구조와 신뢰도 계층을 확인한 뒤 판단하세요.
+입력된 claim과 keywords를 분석하여 어느 폴더에서 검색할지 결정한다.
+반드시 read_directory_map 툴을 호출하여 폴더 구조와 신뢰도 계층을 확인한 뒤 판단한다.
 
 [결정 기준]
-- 문서 유형과 claim의 성격을 매칭하세요 (학술 주장이면 paper, 통계/시장데이터면 report 등)
-- 신뢰도 계층(paper > report > proposal > etc)을 고려하여 우선순위를 정하세요
-- 관련성 없는 폴더는 제외하고, 1~4개 폴더를 우선순위 순으로 반환하세요
+- 문서 유형과 claim의 성격을 매칭한다 (학술 주장이면 paper, 통계/시장데이터면 report 등)
+- 신뢰도 계층(paper > report > proposal > etc)을 고려하여 우선순위를 정한다
+- 관련성 없는 폴더는 제외하고, 1~4개 폴더를 우선순위 순으로 반환한다
 
-반드시 아래 JSON 형식으로만 출력하세요:
+반드시 아래 JSON 형식으로만 출력한다:
 {
   "folders": ["folder1", "folder2"],
   "reason": "폴더 선택 이유 (간단히)"
@@ -535,18 +535,18 @@ def run_folder_router_agent(
 
 # ─── Agent 3: SearchHighlightAgent ─────────────────────────────────────────────
 
-_SEARCH_HIGHLIGHT_SYSTEM = f"""당신은 RAG 검색 및 하이라이트 생성 에이전트입니다.
+_SEARCH_HIGHLIGHT_SYSTEM = f"""너는 RAG 검색 및 하이라이트 생성 에이전트다.
 
-입력된 claim, keywords, folders를 기반으로 아래 절차를 수행하세요.
+입력된 claim, keywords, folders를 기반으로 아래 절차를 수행한다.
 
 [절차]
-1. 제공된 folders 순서대로, keywords를 활용해 search_vector_db 툴을 호출하세요
-   - search_vector_db 호출 시 반드시 현재 claim과 keywords를 그대로 함께 전달하세요 (관련성 필터에 사용됩니다)
-2. 총 {MAX_AGENT_TURNS}회 이내로 검색하세요 (폴더×키워드 조합)
-3. valid_count가 0이거나 결과가 부족하면 (관련성 필터로 제거된 경우 포함) 다른 키워드 또는 다음 폴더로 재시도하세요
-4. 수집된 모든 청크 중 claim과 가장 관련성이 높은 청크 1개를 선별하세요
-5. 선별된 청크를 근거로 100자 내외의 highlight를 작성하세요
-6. 왜 그 청크를 선택했는지 이유(highlight_reason)도 함께 작성하세요
+1. 제공된 folders 순서대로, keywords를 활용해 search_vector_db 툴을 호출한다
+   - search_vector_db 호출 시 반드시 현재 claim과 keywords를 그대로 함께 전달한다 (관련성 필터에 사용된다)
+2. 총 {MAX_AGENT_TURNS}회 이내로 검색한다 (폴더×키워드 조합)
+3. valid_count가 0이거나 결과가 부족하면 (관련성 필터로 제거된 경우 포함) 다른 키워드 또는 다음 폴더로 재시도한다
+4. 수집된 모든 청크 중 claim과 가장 관련성이 높은 청크 1개를 선별한다
+5. 선별된 청크를 근거로 100자 내외의 highlight를 작성한다
+6. 왜 그 청크를 선택했는지 이유(highlight_reason)도 함께 작성한다
 
 [최종 출력 - 반드시 JSON 형식]
 {{
