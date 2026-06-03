@@ -263,6 +263,9 @@ state에서 **intent 목록을 결정론으로 뽑아**(`_build_intents`) **LLM 
 - `langchain-openai ChatOpenAI`, JSON 모드 + 스키마 힌트 주입 + pydantic 검증, 실패 시 1회 재시도.
 - 3단 방어: 프롬프트에 스키마 박기 → JSON 모드 → pydantic `model_validate`.
 - 모델 교체: `BPM_LLM_MODEL`(오케스트레이터), `OPENAI_MODEL`(리서치/RAG).
+- env 읽기(모델·키·검색 프로바이더)는 `common/config.py` 한 곳의 명명 접근자
+  (`orchestrator_model`·`require_openai_key`·`search_provider` 등)로 모은다 — 호출부는
+  `os.environ`을 직접 읽지 않는다. 두 모델 노브가 갈린 이유도 거기 적혀 있다.
 
 ---
 
@@ -326,4 +329,5 @@ agents/rag/                    RAG retrieval 워커 (rag_extractor + worker 어�
 agents/logic_validator/        논리검증 워커 (validator 엔진 호출 어댑터)
 agents/validator/              validator 엔진 (run_validator: claim↔근거 판정)
 common/schema/{state,labels}.py  슬롯·라벨·타입 정의
+common/config.py               환경설정 단일 표면 (모델·키·검색 프로바이더 env 읽기)
 ```
