@@ -10,9 +10,10 @@ from __future__ import annotations
 
 import asyncio
 import logging
+from datetime import date
 from typing import Optional, Tuple, TYPE_CHECKING
 
-from common.schema import ValidationReport
+from common.schema import Citation, ValidationReport
 
 if TYPE_CHECKING:
     from agents.rag.rag_extractor import RagExtractorResult
@@ -21,13 +22,19 @@ if TYPE_CHECKING:
 logger = logging.getLogger(__name__)
 
 
-def _report(subject: str, findings: list[str], sources: list[str]) -> ValidationReport:
+def _report(
+    subject: str,
+    findings: list[str],
+    sources: list[str],
+    citations: Optional[list[Citation]] = None,
+) -> ValidationReport:
     return {
         "subject": (subject or "")[:80],
         "findings": findings,
         "sources": sources,
         "agreement": "unknown",  # 판정은 logic_validator의 몫 — 여기선 retrieval만.
         "cluster": "rag",
+        "citations": citations or [],
     }
 
 
@@ -67,4 +74,24 @@ async def run_rag_check(
     source_page = (result.get("source_page") or "").strip()
     sources = [f"{source_file} (p.{source_page})".strip()] if source_file else []
 
-    return (_report(subject, findings, sources), result)
+    # 구조화 출처 — RagExtractorResult가 이미 쥐고 있던 파일/페이지/폴더/원문을 보존한다(평탄화 중단).
+    # similarity_pct는 검색 툴 루프 안에서만 살고 RagExtractorResult엔 안 실리므로 score_kind="none".
+    citations: list[Citation] = []
+    if source_file:
+        raw = (result.get("raw_source") or "").strip()
+        citations.append(
+            {
+                "cluster": "rag",
+                "title": source_file,
+                "url": "",
+                "snippet": highlight or raw[:200],
+                "source_file": source_file,
+                "page": source_page,
+                "folder": (result.get("folder_searched") or "").strip(),
+                "score": 0.0,
+                "score_kind": "none",
+                "accessed_at": date.today().isoformat(),
+            }
+        )
+
+    return (_report(subject, findings, sources, citations), result)
