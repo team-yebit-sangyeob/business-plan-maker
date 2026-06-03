@@ -15,7 +15,7 @@ from __future__ import annotations
 import asyncio
 from typing import TYPE_CHECKING
 
-from common.schema import PlanState, ValidationReport, VerificationRequest
+from common.schema import EvidenceRecord, PlanState, ValidationReport, VerificationRequest
 from agents.orchestrator.progress import emit
 
 if TYPE_CHECKING:
@@ -24,6 +24,20 @@ if TYPE_CHECKING:
 
 # 실제 워커를 가진 라우트. clarify/none은 디스패치 대상이 아님.
 _WORKER_ROUTES = {"research", "rag", "logic_validator"}
+
+
+def _evidence_record(report: ValidationReport, target_slot: str | None, turn: int) -> EvidenceRecord:
+    """ValidationReport + 슬롯 연결 → 세션 누적용 EvidenceRecord. target_slot은 dispatch
+    시점의 세그먼트 힌트(없을 수 있음) — run_turn이 fill 확정 슬롯으로 백필한다."""
+    return {
+        "subject": report.get("subject", ""),
+        "cluster": report.get("cluster", "research"),
+        "findings": report.get("findings") or [],
+        "agreement": report.get("agreement", "unknown"),
+        "citations": report.get("citations") or [],
+        "target_slot": target_slot,
+        "turn": turn,
+    }
 
 # 리서치 검색 recency 힌트 기본값(일). 회사 조직처럼 빠르게 변하는 항목은 추후 세분화.
 _RESEARCH_FRESHNESS_DAYS = 180
@@ -61,7 +75,8 @@ async def parallel_dispatch_workers_node(state: PlanState) -> dict:
     # 디스패치 대상 세그먼트만 추림 (subject 비어있으면 제외).
     # '워커 라우트 유무'로 판단 — claim·question 등 워커 라우트가 있으면 매트릭스대로 디스패치.
     # (interaction(meta·recall)·correction·명확화-only 세그먼트는 워커 라우트가 없어 제외)
-    targets: list[tuple[str, list[str], str]] = []
+    # 튜플 4번째 = 세그먼트의 target_slot 힌트 — 근거를 슬롯에 연결하는 1차 단서(없으면 None).
+    targets: list[tuple[str, list[str], str, str | None]] = []
     for seg in segments:
         routes = seg.get("routes") or []
         if not (_WORKER_ROUTES & set(routes)):
@@ -71,7 +86,7 @@ async def parallel_dispatch_workers_node(state: PlanState) -> dict:
             continue
         labels = seg.get("utterance_types") or []
         label = labels[0] if labels else "claim"
-        targets.append((subject, list(routes), label))
+        targets.append((subject, list(routes), label, seg.get("target_slot")))
 
     if not targets:
         return {}
@@ -80,7 +95,7 @@ async def parallel_dispatch_workers_node(state: PlanState) -> dict:
     # 호출 직전에 agent_start를 발행 → 프론트가 '실행 중'을 실제 호출과 동시에 본다.
     fact_specs: list[tuple[int, str]] = []  # (target_idx, route)
     fact_coros = []
-    for idx, (subject, routes, label) in enumerate(targets):
+    for idx, (subject, routes, label, _slot) in enumerate(targets):
         if "research" in routes:
             fact_specs.append((idx, "research"))
             emit({"type": "agent_start", "cluster": "research", "subject": subject[:80]})
@@ -100,6 +115,8 @@ async def parallel_dispatch_workers_node(state: PlanState) -> dict:
     rag_result_by_idx: dict[int, "RagExtractorResult"] = {}
     research_report_by_idx: dict[int, ValidationReport] = {}
     reports: list[ValidationReport] = []
+    # (report, target_idx) — 리포트를 세그먼트(→슬롯)로 되짚어 EvidenceRecord를 만든다.
+    report_idx: list[tuple[ValidationReport, int]] = []
     for (idx, route), res in zip(fact_specs, fact_results):
         if route == "rag":
             report, rag_result = res
@@ -109,11 +126,13 @@ async def parallel_dispatch_workers_node(state: PlanState) -> dict:
             report = res
             research_report_by_idx[idx] = report
         reports.append(report)
+        report_idx.append((report, idx))
         emit({"type": "validation_report", **report})
 
     # --- 2단계: 논리검증 (1단계 RAG 산출물을 입력으로) ---
     lv_coros = []
-    for idx, (subject, routes, _label) in enumerate(targets):
+    lv_idx: list[int] = []  # lv 리포트가 어느 타깃(→슬롯)에서 나왔는지
+    for idx, (subject, routes, _label, _slot) in enumerate(targets):
         if "logic_validator" in routes:
             emit({"type": "agent_start", "cluster": "logic_validator", "subject": subject[:80]})
             lv_coros.append(
@@ -123,14 +142,21 @@ async def parallel_dispatch_workers_node(state: PlanState) -> dict:
                     research_report_by_idx.get(idx),
                 )
             )
+            lv_idx.append(idx)
     if lv_coros:
         lv_reports = list(await asyncio.gather(*lv_coros))
-        for report in lv_reports:
+        for j, report in enumerate(lv_reports):
             emit({"type": "validation_report", **report})
-        reports.extend(lv_reports)
+            reports.append(report)
+            report_idx.append((report, lv_idx[j]))
 
     if not reports:
         return {}
 
-    # turn_validation_reports = 이번 턴 dispatch 결과만(대화 보고·SSE 활동용).
-    return {"turn_validation_reports": reports}
+    # turn_validation_reports = 이번 턴 dispatch 결과만(대화 보고·SSE 활동용, 매 턴 리셋).
+    # turn_evidence = 같은 결과 + 슬롯 연결정보. run_turn이 session_evidence로 누적한다.
+    turn = state.get("turn", 0)
+    turn_evidence: list[EvidenceRecord] = [
+        _evidence_record(report, targets[idx][3], turn) for report, idx in report_idx
+    ]
+    return {"turn_validation_reports": reports, "turn_evidence": turn_evidence}

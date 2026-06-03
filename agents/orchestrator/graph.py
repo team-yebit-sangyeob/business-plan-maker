@@ -30,7 +30,7 @@ from typing import Literal
 
 from langgraph.graph import StateGraph, START, END
 
-from common.schema import PlanState, Message
+from common.schema import EvidenceRecord, Message, PlanState, Segment
 from agents.orchestrator.nodes.segment import segment_node
 from agents.orchestrator.nodes.classify import classify_node
 from agents.orchestrator.nodes.correction import (
@@ -92,6 +92,34 @@ def build_graph():
     return g.compile()
 
 
+def _merge_session_evidence(
+    prev: list[EvidenceRecord],
+    turn_evidence: list[EvidenceRecord],
+    segments: list[Segment],
+) -> list[EvidenceRecord]:
+    """이번 턴 근거를 세션 누적분에 합친다 — 슬롯 백필 + 중복 제거.
+
+    백필: dispatch 시점엔 세그먼트 힌트만 있을 수 있다(target_slot=None 가능). extract_fills는
+      dispatch '뒤'에 돌며 슬롯을 확정하므로, 그 확정 슬롯을 turn_segments에서 subject로 되짚어
+      더 정확한 값으로 덮는다(없으면 dispatch 힌트 유지).
+    중복 제거: 키 (subject, cluster), last-write-wins. 같은 claim을 다음 턴 재검증해도 최신 1건만.
+    """
+    slot_by_subject = {
+        (s.get("canonical_text") or s.get("text", "")).strip()[:80]: s.get("target_slot")
+        for s in (segments or [])
+        if s.get("target_slot")
+    }
+    enriched: list[EvidenceRecord] = []
+    for rec in turn_evidence:
+        final_slot = slot_by_subject.get(rec.get("subject", "")) or rec.get("target_slot")
+        enriched.append({**rec, "target_slot": final_slot})
+
+    merged: dict[tuple[str, str], EvidenceRecord] = {}
+    for rec in [*prev, *enriched]:
+        merged[(rec.get("subject", ""), rec.get("cluster", ""))] = rec  # 뒤(=최신)가 이김
+    return list(merged.values())
+
+
 async def run_turn(state: PlanState, user_input: str) -> PlanState:
     """한 턴 실행. state는 이전 턴의 누적 상태."""
     graph = build_graph()
@@ -108,8 +136,18 @@ async def run_turn(state: PlanState, user_input: str) -> PlanState:
         "output_request": None,
         "pending_clarifications": [],
         "turn_validation_reports": [],
+        "turn_evidence": [],
     }
     result: PlanState = await graph.ainvoke(next_state)
+
+    # 이번 턴 근거를 세션 누적분(session_evidence)으로 합친다 — 계획서가 출처를 인용하는 원천.
+    # (turn_validation_reports와 달리 턴을 넘어 살아남는다. messages·correction_log와 같은 위치에서 누적.)
+    session_evidence = _merge_session_evidence(
+        list(result.get("session_evidence") or []),
+        list(result.get("turn_evidence") or []),
+        result.get("turn_segments") or [],
+    )
+    result = {**result, "session_evidence": session_evidence}
 
     # 어시스턴트 응답 적재
     answer = (result.get("pending_question") or "").strip()

@@ -78,14 +78,16 @@ OPTIONAL_SLOTS = tuple(s for s in ALL_SLOTS if s not in REQUIRED_SLOTS)
 ### PlanState
 
 그래프가 노드 사이로 주고받는 한 턴의 모든 것: `session_id, turn, user_input, messages[],
-turn_segments[], slots{}, correction_log[], validation_reports[], turn_validation_reports[],
-pending_clarifications[], pending_question, output_request, pending_confirmations[]`.
+turn_segments[], slots{}, correction_log[], turn_validation_reports[], turn_evidence[],
+session_evidence[], pending_clarifications[], pending_question, output_request, pending_confirmations[]`.
 `initial_state()`가 빈 한 벌을 만든다 (슬롯 10개 모두 empty).
 > `pending_confirmations[]`는 **애매해서 주입을 보류한 슬롯 값 큐**(`PendingConfirmation`). fill이
 > `ambiguous`로 본 값을 슬롯 대신 여기 쌓고, 다음 턴 `confirm_resolve`가 사용자 답으로 해소한다.
 > 다른 턴 임시필드와 달리 `run_turn`이 리셋하지 않아 **턴을 넘어 영속**(세션 스토어가 통째 저장).
-> `validation_reports`는 **누적**, `turn_validation_reports`는 **이번 턴 dispatch 결과만**(매 턴 리셋).
-> 대화 에이전트의 결과 보고가 '방금 돌린 것'만 보도록 분리(`turn_validation_reports`).
+> `turn_validation_reports`는 **이번 턴 dispatch 결과만**(매 턴 리셋) — 대화 에이전트의 결과 보고가
+> '방금 돌린 것'만 보도록 분리. `turn_evidence`도 이번 턴치(리셋)이되 슬롯 연결정보를 더한 `EvidenceRecord`다.
+> `run_turn`이 끝에서 `turn_evidence`를 `session_evidence`로 합친다(중복 제거 + 슬롯 백필) — `session_evidence`는
+> **세션 전체 누적**이라 턴을 넘어 영속하며, 계획서(planner)가 출처를 인용하는 원천이다.
 > SSE 에이전트 활동(`agent_start`→`validation_report`)은 `_stream`이 사후 재생하지 않고
 > **dispatch가 워커 호출 직전/직후에 실시간 emit**한다 — `progress.py`의 ContextVar emitter가
 > `chat.py`의 `asyncio.Queue`로 들어가고, `_stream`이 `run_turn`과 동시에 큐를 비워 흘린다.
