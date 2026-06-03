@@ -3,10 +3,12 @@
 spec v0.7.5: "검증" 단계는 사라지고 logic_validator·리서치·RAG 호출로 분기.
 
 2단계 디스패치 (리서치·RAG 병렬 → 논리검증 후속):
-  1단계 — research·rag를 전 세그먼트 병렬(asyncio.gather)로 먼저 끝낸다. RAG는 회수 결과
-          (ValidationReport)와 함께 원본 RagExtractorResult를 돌려준다.
-  2단계 — logic_validator는 같은 세그먼트의 1단계 RAG 산출물(RagExtractorResult)을 입력으로
-          받아 claim ↔ 사내 근거의 논리적 지지 여부(verdict→agreement)를 판정한다.
+  1단계 — research·rag를 전 세그먼트 병렬로 돌리되, asyncio.as_completed로 완료되는 대로
+          결과 카드(validation_report)를 발행한다 — 먼저 끝난 워커(웹/사내문서)가 먼저 보인다.
+          RAG는 회수 결과(ValidationReport)와 함께 원본 RagExtractorResult를 돌려준다.
+  2단계 — logic_validator는 1단계 전체 완료 뒤 시작(배리어)하며, 같은 세그먼트의 1단계 RAG
+          산출물(RagExtractorResult)을 입력으로 받아 claim ↔ 사내 근거의 논리적 지지 여부
+          (verdict→agreement)를 판정한다.
 라우트 매트릭스상 logic_validator는 항상 rag와 동반하므로(claim), 판정에 쓸 RAG
 결과는 늘 존재한다. 만약 RAG가 근거를 못 찾으면(rag_result=None) '근거 없음'으로 흐른다.
 """
@@ -38,6 +40,12 @@ def _evidence_record(report: ValidationReport, target_slot: str | None, turn: in
         "target_slot": target_slot,
         "turn": turn,
     }
+
+
+async def _tagged(idx: int, route: str, coro):
+    """워커 1건을 (idx, route, result)로 태깅 — as_completed가 누가 끝났는지 알게 한다."""
+    return idx, route, await coro
+
 
 # 리서치 검색 recency 힌트 기본값(일). 회사 조직처럼 빠르게 변하는 항목은 추후 세분화.
 _RESEARCH_FRESHNESS_DAYS = 180
@@ -95,31 +103,30 @@ async def parallel_dispatch_workers_node(state: PlanState) -> dict:
 
     # --- 1단계: 리서치·RAG 병렬 (외부 사실 + 회사 문서) ---
     # 호출 직전에 agent_start를 발행 → 프론트가 '실행 중'을 실제 호출과 동시에 본다.
+    # fact_specs는 디스패치(등장) 순서를 보존 — 발행은 완료순이어도 반환 리스트는 이 순서로 되돌린다.
     fact_specs: list[tuple[int, str]] = []  # (target_idx, route)
-    fact_coros = []
+    fact_tasks = []
     for idx, (subject, routes, label, _slot) in enumerate(targets):
         if "research" in routes:
             fact_specs.append((idx, "research"))
             emit({"type": "agent_start", "cluster": "research", "subject": subject[:80]})
-            fact_coros.append(
-                run_research(_verification_request(subject, label, slots, state))
+            fact_tasks.append(
+                _tagged(idx, "research", run_research(_verification_request(subject, label, slots, state)))
             )
         if "rag" in routes:
             fact_specs.append((idx, "rag"))
             emit({"type": "agent_start", "cluster": "rag", "subject": subject[:80]})
-            fact_coros.append(run_rag_check(subject))
+            fact_tasks.append(_tagged(idx, "rag", run_rag_check(subject)))
 
-    fact_results = list(await asyncio.gather(*fact_coros)) if fact_coros else []
-
-    # 1단계 결과 적재 + 결과 카드 발행. RAG는 (report, rag_result) 튜플 → rag_result는
-    # 2단계 logic_validator 입력으로만 쓰고 프론트엔 안 보낸다(raw_source 등 대용량 제외).
+    # 완료 순으로 결과 카드를 즉시 발행 — 먼저 끝난 워커(웹/사내문서)가 먼저 보인다.
+    # RAG는 (report, rag_result) 튜플 → rag_result는 2단계 logic_validator 입력으로만 쓰고
+    # 프론트엔 안 보낸다(사내 원문은 report.citations의 snippet/raw_source로 별도 전달).
     # research report도 idx로 보관해 2단계 logic_validator에 보조 근거로 넘긴다(claim 라우트일 때만).
     rag_result_by_idx: dict[int, "RagExtractorResult"] = {}
     research_report_by_idx: dict[int, ValidationReport] = {}
-    reports: list[ValidationReport] = []
-    # (report, target_idx) — 리포트를 세그먼트(→슬롯)로 되짚어 EvidenceRecord를 만든다.
-    report_idx: list[tuple[ValidationReport, int]] = []
-    for (idx, route), res in zip(fact_specs, fact_results):
+    report_by_spec: dict[tuple[int, str], ValidationReport] = {}
+    for coro in asyncio.as_completed(fact_tasks):
+        idx, route, res = await coro
         if route == "rag":
             report, rag_result = res
             if rag_result is not None:
@@ -127,11 +134,21 @@ async def parallel_dispatch_workers_node(state: PlanState) -> dict:
         else:  # route == "research"
             report = res
             research_report_by_idx[idx] = report
-        reports.append(report)
-        report_idx.append((report, idx))
+        report_by_spec[(idx, route)] = report
         emit({"type": "validation_report", **report})
 
+    # 반환용 리스트는 디스패치 순서로 재구성(결정론) — 발행은 완료순이지만 다운스트림은 안정순으로.
+    # (report, target_idx) — 리포트를 세그먼트(→슬롯)로 되짚어 EvidenceRecord를 만든다.
+    reports: list[ValidationReport] = []
+    report_idx: list[tuple[ValidationReport, int]] = []
+    for (idx, route) in fact_specs:
+        report = report_by_spec[(idx, route)]
+        reports.append(report)
+        report_idx.append((report, idx))
+
     # --- 2단계: 논리검증 (1단계 RAG 산출물을 입력으로) ---
+    # 2단계는 1단계 전체 완료 뒤 시작(배리어 유지) — lv는 같은 idx의 RAG·리서치 산출물이 필요.
+    # lv가 여럿이면 1단계처럼 완료순으로 발행하고, 반환은 lv_idx(디스패치) 순서로 되돌린다.
     lv_coros = []
     lv_idx: list[int] = []  # lv 리포트가 어느 타깃(→슬롯)에서 나왔는지
     for idx, (subject, routes, _label, _slot) in enumerate(targets):
@@ -146,11 +163,17 @@ async def parallel_dispatch_workers_node(state: PlanState) -> dict:
             )
             lv_idx.append(idx)
     if lv_coros:
-        lv_reports = list(await asyncio.gather(*lv_coros))
-        for j, report in enumerate(lv_reports):
+        lv_tasks = [
+            _tagged(lv_idx[j], "logic_validator", c) for j, c in enumerate(lv_coros)
+        ]
+        lv_by_idx: dict[int, ValidationReport] = {}
+        for coro in asyncio.as_completed(lv_tasks):
+            tgt_idx, _route, report = await coro
             emit({"type": "validation_report", **report})
-            reports.append(report)
-            report_idx.append((report, lv_idx[j]))
+            lv_by_idx[tgt_idx] = report
+        for tgt_idx in lv_idx:
+            reports.append(lv_by_idx[tgt_idx])
+            report_idx.append((lv_by_idx[tgt_idx], tgt_idx))
 
     if not reports:
         return {}
