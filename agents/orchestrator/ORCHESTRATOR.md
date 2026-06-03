@@ -81,8 +81,8 @@ OPTIONAL_SLOTS = tuple(s for s in ALL_SLOTS if s not in REQUIRED_SLOTS)
 turn_segments[], slots{}, correction_log[], turn_validation_reports[], turn_evidence[],
 session_evidence[], pending_clarifications[], pending_question, output_request, pending_confirmations[]`.
 `initial_state()`가 빈 한 벌을 만든다 (슬롯 10개 모두 empty).
-> `pending_confirmations[]`는 **애매해서 주입을 보류한 슬롯 값 큐**(`PendingConfirmation`). fill이
-> `ambiguous`로 본 값을 슬롯 대신 여기 쌓고, 다음 턴 `confirm_resolve`가 사용자 답으로 해소한다.
+> `pending_confirmations[]`는 **주입을 보류한 슬롯 값 큐**(`PendingConfirmation`). fill이 슬롯 애매(`confirm_kind="slot"`)
+> 거나 결정 미확정(탐색, `confirm_kind="commit"`)으로 본 값을 슬롯 대신 여기 쌓고, 다음 턴 `confirm_resolve`가 사용자 답으로 해소한다.
 > 다른 턴 임시필드와 달리 `run_turn`이 리셋하지 않아 **턴을 넘어 영속**(세션 스토어가 통째 저장).
 > `turn_validation_reports`는 **이번 턴 dispatch 결과만**(매 턴 리셋) — 대화 에이전트의 결과 보고가
 > '방금 돌린 것'만 보도록 분리. `turn_evidence`도 이번 턴치(리셋)이되 슬롯 연결정보를 더한 `EvidenceRecord`다.
@@ -91,6 +91,8 @@ session_evidence[], pending_clarifications[], pending_question, output_request, 
 > SSE 에이전트 활동(`agent_start`→`validation_report`)은 `_stream`이 사후 재생하지 않고
 > **dispatch가 워커 호출 직전/직후에 실시간 emit**한다 — `progress.py`의 ContextVar emitter가
 > `chat.py`의 `asyncio.Queue`로 들어가고, `_stream`이 `run_turn`과 동시에 큐를 비워 흘린다.
+> 같은 경로로 **노드 단계(`stage`) 이벤트**도 흐른다 — `graph._staged` 래퍼가 노드 시작 직전
+> `{type:"stage", node, label}`을 emit해(dispatch·integrator 제외), 워커 안 도는 턴도 진행 단계가 보인다.
 
 ---
 
@@ -126,7 +128,7 @@ START
 **토폴로지상 맨 앞(START 직후)** — `pending_confirmations`가 비어 있으면 no-op이라 일반 턴엔 영향이 없다. 큐에 보류 건이 있으면(직전 턴에 fill이 애매하다고 판단해 쌓아둔 것), 이번 사용자 발화를 그 확인 질문에 대한 답으로 보고 LLM이 판정:
 - `pick`: 후보 슬롯 중 하나를 고르거나 긍정 → 그 슬롯에 보류값 주입(이미 찬 슬롯이면 덮지 않음) + 큐에서 제거.
 - `reject`: "아니/빼" 등 부정 → 큐에서 제거(슬롯은 빈 채).
-- `unclear`: 그 질문과 무관한 다른 얘기 → `attempts++`; 한도(2회) 넘으면 제안 슬롯으로 자동 확정(무한 재질문 방지), 아니면 유지(다음 턴 재질문).
+- `unclear`: 그 질문과 무관한 다른 얘기 → `confirm_kind`로 가른다. `commit`(결정 미확정)은 드롭(결정 안 한 건 안 채운다), `slot`(값은 결정, 칸만 모름)은 `attempts++` 후 한도(2회) 넘으면 제안 슬롯으로 자동 확정(무한 재질문 방지).
 
 해소 후에도 파이프라인은 계속 흐른다 — 같은 발화에 추가 정보가 있으면 segment 이하가 정상 처리하고, 방금 채운 슬롯은 더 이상 empty가 아니라 fill이 다시 건드리지 않는다.
 
@@ -176,9 +178,14 @@ START
 
 dispatch 경로에서만 실행 (그래프상 dispatch 다음). **비어있는 슬롯**에 들어갈 값을 세그먼트에서 추출하고, **슬롯 선택의 단일 권위**다(segment의 `target_slot` 힌트는 payload에 prior로만 넘겨 두 판단이 갈리는 걸 줄인다).
 - 후보 = `claim` 라벨 가진 세그먼트. 빈 슬롯 없으면 LLM 호출 안 함 (비용 절약).
-- `_FILL_SYSTEM`에 `slot_guide_text()` 임베드. LLM은 fill마다 `{slot, value, confidence(clear|ambiguous), alt_slots[], reason}` 반환.
-- **명확(`clear`)** → 빈 슬롯에 즉시 주입(`source_label=USER`). 이미 찬 슬롯은 correction_node 담당.
-- **애매(`ambiguous` 또는 `alt_slots` 있음)** → 주입하지 않고 `pending_confirmations`에 한 건 쌓음(후보 중 빈 슬롯이 하나도 없으면 스킵). 다음 턴 `confirm_resolve`(§3.0)가 사용자 답으로 확정. → "같은 내용이 다른 슬롯에 들어가는" 문제를 (a)경계 명문화 (b)선택 단일화 (c)애매 시 사용자 확인으로 막는다.
+- `_FILL_SYSTEM`에 `slot_guide_text()` + **`[직전 대화]`(recent_history)** 임베드. LLM은 fill마다 `{slot, value, kind(decision|exploration), confidence(clear|ambiguous), alt_slots[], reason}` 반환. 두 축을 가린다 — `kind`(사용자가 그 값을 **결정**했나)와 `confidence`(**어느 슬롯**인지 명확한가).
+- `kind=decision` 기준: (a) 명시적 확정("X로 하자/가자/정했어") 또는 (b) 직전에 어시스턴트가 물은 슬롯 질문에 직접 답함. 단순 탐색·가설("X가 좋을 것 같은데", "X는 어때?")은 `exploration`. 애매하면 `exploration`.
+- (b)는 **결정론 안전망**으로 보강한다 — `conversation_node`가 `ask_slot`을 물 때 `last_asked_slot`을 기록하고, fill은 그 슬롯에 대한 답이면 LLM이 보수적으로 `exploration`을 줘도 `decision`으로 승격한다(정상 슬롯 답변이 확인 질문으로 새는 과차단 방지 — gpt-5-mini가 짧은 명사구 답을 탐색으로 보는 경향을 막는다).
+- 쓰기 게이트 **세 갈래**:
+  - **결정 + 슬롯 명확** → 빈 슬롯에 즉시 주입(`source_label=USER`). 이미 찬 슬롯은 correction_node 담당.
+  - **결정 + 슬롯 애매**(`ambiguous` 또는 `alt_slots`) → 주입하지 않고 `pending_confirmations`(`confirm_kind="slot"`)에 쌓음(후보 중 빈 슬롯이 하나도 없으면 스킵). 다음 턴 `confirm_resolve`가 "어느 슬롯?" 답으로 확정.
+  - **탐색** → 주입 안 함. 채울 수 있는 빈 슬롯이면 `pending_confirmations`(`confirm_kind="commit"`, **턴당 1건**)에 쌓아 "이거 X에 넣을까요?"를 묻고, 미응답이면 `confirm_resolve`가 드롭(결정 안 한 건 안 채운다).
+- → "결정 안 한 값이 슬롯에 박히는" 문제와 "같은 내용이 다른 슬롯에 들어가는" 문제를 (a)경계 명문화 (b)선택 단일화 (c)결정/탐색 분리 + 확인으로 막는다.
 
 ### 3.5 `parallel_dispatch_workers_node` (`nodes/dispatch.py`)
 
@@ -270,7 +277,8 @@ state에서 **intent 목록을 결정론으로 뽑아**(`_build_intents`) **LLM 
 | 스코프 밖 발화 | 없음 (리다이렉트) | 없음 | `in_scope=false` → routes none |
 | 메타·단순응답 | 없음 | 없음 | interaction(`meta`) — "응"·"다음" 등 |
 | 되묻기 | 없음 | 없음 | interaction(`recall`) — 대화 이력에서 답("아까 ~라며?") |
-| 애매한 슬롯 값 | 라벨에 따라 | 보류→확인 후 | fill `ambiguous` → `confirm_slot` → 다음 턴 `confirm_resolve` |
+| 애매한 슬롯 값(어느 칸) | 라벨에 따라 | 보류→확인 후 | fill `ambiguous` → `confirm_slot`(slot) → 다음 턴 `confirm_resolve` |
+| 탐색·미결정 값 | 라벨에 따라 | 보류→확인 후(미응답 드롭) | fill `kind=exploration` → `confirm_slot`(commit, "이거 X에 넣을까요?") |
 
 > **신호 키워드 정확도**("말고"·"빼자"·"뽑아줘")가 성능의 큰 부분. 첫 단계인
 > 메시지 종류 판단이 어긋나면 그 턴 전체가 어긋난다.
