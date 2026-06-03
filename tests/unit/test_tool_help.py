@@ -15,7 +15,7 @@ from agents.orchestrator.nodes.classify import (
     classify_node,
     derive_routes,
 )
-from agents.conversation.agent import _build_intents, _match_help_slot
+from agents.conversation.agent import _build_intents, _help_scope, _match_help_slot
 
 
 # ---- 순수: derive_routes + tool_help_text + 슬롯 매칭 -----------------------
@@ -34,10 +34,31 @@ def test_tool_help_text_uses_slot_specs():
     assert tool_help_text("nope") == overview
 
 
+def test_tool_help_text_all_scope_lists_every_definition():
+    from common.schema.state import ALL_SLOTS, APP_OVERVIEW
+
+    alltext = tool_help_text(None, "all")
+    # 10개 슬롯 정의를 빠짐없이 — 제목만이 아니라 역할(정의)까지
+    for name in ALL_SLOTS:
+        assert SLOT_SPECS[name]["title"] in alltext
+        assert SLOT_SPECS[name]["definition"] in alltext
+    # all 스코프는 도구 일반 소개(APP_OVERVIEW)가 아니라 슬롯별 역할 목록이다
+    assert APP_OVERVIEW not in alltext
+
+
 def test_match_help_slot():
     assert _match_help_slot("솔루션 슬롯이 뭐하는 칸이야?") == "solution"
     assert _match_help_slot("넌 뭐 할 수 있어?") is None
     assert _match_help_slot("문제랑 타겟 슬롯 차이?") is None  # 둘 이상 매칭 → None(overview)
+
+
+def test_help_scope():
+    # 특정 슬롯 1개 → slot, 통칭/각 → all, 도구 일반 → general
+    assert _help_scope("솔루션 슬롯이 뭐야?") == ("solution", "slot")
+    assert _help_scope("각 슬롯의 역할을 설명해줄래?") == (None, "all")
+    assert _help_scope("슬롯이 뭐뭐 있어?") == (None, "all")
+    assert _help_scope("넌 뭐 할 수 있어?") == (None, "general")
+    assert _help_scope("이거 어떻게 써?") == (None, "general")
 
 
 # ---- conversation: _build_intents ------------------------------------------
@@ -73,7 +94,20 @@ def test_explain_tool_generic_overview():
     intents = _build_intents(_state(_seg("넌 뭐 할 수 있어?", ["tool_help"])))
     et = next(i for i in intents if i["type"] == "explain_tool")
     assert et["slot"] is None
+    assert et["scope"] == "general"
     assert "ask_slot" not in [i["type"] for i in intents]
+
+
+def test_explain_tool_all_scope_lists_slots():
+    # "각 슬롯" 질문 → scope=all, body에 모든 슬롯의 역할(정의)이 들어간다
+    intents = _build_intents(_state(_seg("각 슬롯의 역할을 설명해줄래?", ["tool_help"])))
+    types = [i["type"] for i in intents]
+    et = next(i for i in intents if i["type"] == "explain_tool")
+    assert et["slot"] is None
+    assert et["scope"] == "all"
+    assert SLOT_SPECS["problem"]["definition"] in et["body"]
+    assert SLOT_SPECS["risks"]["definition"] in et["body"]
+    assert "ask_slot" not in types  # 도구 답이 곧 응답 — 다음 슬롯 질문 보류
 
 
 def test_explain_tool_beats_redirect_when_offscope():

@@ -47,7 +47,7 @@ _SYSTEM = """대화 에이전트
   - report_findings: research는 외부 사실, rag는 회사 내부 자료, logic_validator는 claim과 근거 사이의 논리 검증 결과다. 1~2문장으로 전달하고, 사용자 전제와 어긋나면 부드럽게 교정을 제안한다.
   - answer_question: 사용자가 물은 것에 research와 rag가 찾은 답을 전달한다.
   - recall: 사용자가 직전 대화에 나온 내용을 되묻거나 확인하는 발화. recent_messages(최근 대화 이력)에서 찾아 간결하고 직접적으로 답한다(새 검색·워커 없이). 이력에 없으면 솔직히 모른다고 하고 부드럽게 잇는다.
-  - explain_tool: 사용자가 이 도구·슬롯·사용법을 물었다. 주어진 body(도구/슬롯 설명)만 근거로 친근하게 한두 문장으로 답한다(새 검색·워커 없이, recent_messages도 안 씀). 답한 뒤 한 문장으로 본론(계획 채우기)으로 가볍게 잇는다.
+  - explain_tool: 사용자가 이 도구·슬롯·사용법을 물었다. 주어진 body(도구/슬롯 설명)만 근거로 친근하게 답한다(새 검색·워커 없이, recent_messages도 안 씀). scope가 "all"이면 body의 각 슬롯을 "- 제목: 정의" 불릿 그대로 빠짐없이 보여준다(한두 문장으로 압축하지 않는다). scope가 "slot"이나 "general"이면 한두 문장으로 답한다. 답한 뒤 한 문장으로 본론(계획 채우기)으로 가볍게 잇는다.
   - clarify: 모호한 발화를 좁히는 질문을 한다(이게 있으면 보통 ask_slot은 보류된다).
   - redirect: 스코프 밖 발화를 부드럽게 넘기고 본론으로 잇는다.
   - reject_output: 필수 슬롯이 미달이라 지금은 출력이 이르다고 알리고, 무엇을 채우면 되는지 안내한다.
@@ -101,6 +101,34 @@ def _match_help_slot(text: str) -> str | None:
     return hits[0] if len(hits) == 1 else None
 
 
+# 슬롯을 통칭하는 말(특정 슬롯 별칭이 아님)과 '여럿/전부'를 가리키는 말 — "all" 스코프 판정용.
+# 부분문자열 매칭이라 짧은 음절(각·다·어떤·무슨)은 흔한 단어(생각·있다)에 걸려 과발동하므로
+# 뺀다. 핵심 케이스 "각 슬롯의 역할"은 통칭어 '슬롯'으로 이미 잡혀 enumerator가 필요 없다.
+_GENERIC_SLOT_WORDS: tuple[str, ...] = ("슬롯", "항목", "칸")
+_ENUMERATOR_WORDS: tuple[str, ...] = (
+    "각각", "전부", "모든", "모두", "전체", "뭐뭐", "리스트", "종류",
+)
+
+
+def _help_scope(text: str) -> tuple[str | None, str]:
+    """tool_help 발화 → (slot, scope). scope ∈ {"slot","all","general"}.
+
+    특정 슬롯 1개를 먼저 본다("솔루션 슬롯이 뭐야?" → ("solution","slot")). 아니면 슬롯을
+    통칭하거나 '각/전부' 식으로 묻는지로 all/general을 가른다("각 슬롯의 역할?" → (None,"all"),
+    "넌 뭐 할 수 있어?" → (None,"general")). 두 슬롯 이상이 섞여도(예: "문제랑 타겟 슬롯 차이?")
+    _match_help_slot이 None을 줘 "all"로 떨어진다 — 전체를 보여줘 사용자가 찾게 한다.
+    """
+    slot = _match_help_slot(text)
+    if slot:
+        return slot, "slot"
+    t = text or ""
+    generic = any(w in t for w in _GENERIC_SLOT_WORDS)
+    enumerator = any(w in t for w in _ENUMERATOR_WORDS)
+    if generic or enumerator:
+        return None, "all"
+    return None, "general"
+
+
 def _build_intents(state: PlanState) -> list[dict]:
     """state → 결정론으로 뽑은 의도 목록(conversation_spec 매트릭스)."""
     slots = state.get("slots") or {}
@@ -144,8 +172,15 @@ def _build_intents(state: PlanState) -> list[dict]:
     ]
     for seg in tool_helps:
         subj = (seg.get("canonical_text") or seg.get("text", "")).strip()
-        slot = _match_help_slot(subj)
-        intents.append({"type": "explain_tool", "slot": slot, "body": tool_help_text(slot)})
+        slot, scope = _help_scope(subj)
+        intents.append(
+            {
+                "type": "explain_tool",
+                "slot": slot,
+                "scope": scope,
+                "body": tool_help_text(slot, scope),
+            }
+        )
         suppress_ask = True  # 도구 설명이 곧 응답 — 다음 슬롯 질문은 보류
 
     # 1.5) confirm_slot — 애매해서 보류된 주입(있으면 다음 슬롯 질문은 보류)

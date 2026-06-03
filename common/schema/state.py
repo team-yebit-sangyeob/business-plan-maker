@@ -140,19 +140,28 @@ def slot_guide_text() -> str:
     )
 
 
-def tool_help_text(slot: str | None) -> str:
+def tool_help_text(slot: str | None, scope: str = "general") -> str:
     """tool_help(도구/슬롯 메타질문) 응답용 설명을 렌더 — conversation이 이 문구로 답한다.
 
-    slot이 있으면 그 슬롯의 정의·경계·질문 톤을(SLOT_SPECS 단일 원천), 없으면 도구 전체 설명
-    (APP_OVERVIEW)과 슬롯 목록을 돌려준다. 슬롯 텍스트는 SLOT_SPECS에서만 가져와 중복을 막는다.
+    scope로 셋을 가른다(슬롯 텍스트는 SLOT_SPECS 단일 원천에서만 가져와 중복을 막는다):
+    - "slot"    → 그 슬롯의 정의·경계·질문 톤(특정 슬롯 1개를 물음). slot 인자만 줘도 같다.
+    - "all"     → 슬롯마다 '제목: 정의' 한 줄(각/모든 슬롯의 역할을 물음). 경계·질문 톤은
+                  사용자 답엔 과해 빼고, 정의만 빠짐없이 준다.
+    - "general" → 도구 전체 설명(APP_OVERVIEW)과 슬롯 제목 목록(사용법·능력을 물음).
     """
     spec = SLOT_SPECS.get(slot) if slot else None
-    if spec:
+    if spec and scope != "all":
         return (
             f"{slot} ({spec['title']}) 슬롯: {spec['definition']}\n"
             f"경계: {spec['boundary']}\n"
             f"물을 때 톤: {spec['question']}"
         )
+    if scope == "all":
+        per_slot = "\n".join(
+            f"- {SLOT_SPECS[name]['title']}: {SLOT_SPECS[name]['definition']}"
+            for name in ALL_SLOTS
+        )
+        return f"이 도구가 채우는 항목(슬롯) {len(ALL_SLOTS)}개:\n{per_slot}"
     slot_list = "\n".join(f"- {SLOT_SPECS[name]['title']}" for name in ALL_SLOTS)
     return f"{APP_OVERVIEW}\n\n다루는 항목(슬롯):\n{slot_list}"
 
