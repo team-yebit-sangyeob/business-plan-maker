@@ -1,21 +1,20 @@
-"""LLM 호출 헬퍼 — pydantic JSON 강제 출력.
+"""LLM 호출 헬퍼 — pydantic 구조화 출력.
 
 mock/live 모드 분기는 없다. `OPENAI_API_KEY`가 없으면 실행 자체가 막힌다(fail-fast) —
 `call_json`은 키가 없으면 즉시 RuntimeError를 던진다. 모델은 `BPM_LLM_MODEL`로 교체 가능
 (키 확인·모델 읽기는 `common/config.py`의 `require_openai_key`·`orchestrator_model` 경유).
+
+구조화 출력은 LangChain `with_structured_output`이 맡는다 — 스키마 변환·함수콜 강제·파싱·
+pydantic 검증을 한 번에. (수동 JSON 스키마 주입+json.loads+model_validate를 대체.)
 """
 from __future__ import annotations
 
-import json
-import logging
 from typing import TypeVar
 
-from pydantic import BaseModel, ValidationError
+from pydantic import BaseModel
 
 from common.config import orchestrator_model, require_openai_key
 
-
-logger = logging.getLogger(__name__)
 
 T = TypeVar("T", bound=BaseModel)
 
@@ -23,38 +22,22 @@ T = TypeVar("T", bound=BaseModel)
 async def call_json(system: str, user: str, schema: type[T]) -> T:
     """system/user 프롬프트로 LLM 호출 → schema 인스턴스 반환.
 
-    키가 없으면 RuntimeError. 응답 JSON이 스키마에 안 맞으면 1회 재시도 후 실패한다.
+    키가 없으면 RuntimeError. `with_structured_output`이 함수콜로 스키마를 강제하고 검증된
+    pydantic 인스턴스를 돌려준다. 전이 오류(429·timeout) 재시도는 그래프 노드의 RetryPolicy가
+    일원화하므로 여기선 따로 두지 않는다(planner의 호출은 그래프 밖이라 전이 오류가 그대로
+    전파되지만, 기존에도 그 루프는 검증 오류만 잡았을 뿐 전이 오류는 전파했다 — 동작 동일).
     """
     require_openai_key("app")
 
     from langchain_openai import ChatOpenAI
 
-    model_name = orchestrator_model()
     llm = ChatOpenAI(
-        model=model_name,
+        model=orchestrator_model(),
         temperature=0,
-        model_kwargs={"response_format": {"type": "json_object"}},
+    ).with_structured_output(schema, method="function_calling")
+    return await llm.ainvoke(
+        [
+            {"role": "system", "content": system},
+            {"role": "user", "content": user},
+        ]
     )
-    json_schema_hint = json.dumps(schema.model_json_schema(), ensure_ascii=False)
-    augmented_system = (
-        system.strip()
-        + "\n\n반드시 다음 JSON 스키마에 맞는 JSON 객체만 출력하라:\n"
-        + json_schema_hint
-    )
-
-    last_error: Exception | None = None
-    for _ in range(2):
-        try:
-            resp = await llm.ainvoke(
-                [
-                    {"role": "system", "content": augmented_system},
-                    {"role": "user", "content": user},
-                ]
-            )
-            raw = resp.content if isinstance(resp.content, str) else str(resp.content)
-            data = json.loads(raw)
-            return schema.model_validate(data)
-        except (json.JSONDecodeError, ValidationError) as exc:
-            last_error = exc
-            continue
-    raise RuntimeError(f"LLM JSON 파싱 실패: {last_error}")

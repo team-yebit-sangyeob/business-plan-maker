@@ -29,6 +29,7 @@ from functools import lru_cache
 from typing import Literal
 
 from langgraph.graph import StateGraph, START, END
+from langgraph.types import RetryPolicy
 
 from common.schema import EvidenceRecord, Message, PlanState, Segment
 from agents.orchestrator.nodes.segment import segment_node
@@ -46,6 +47,12 @@ from agents.conversation.agent import conversation_node
 
 
 _WORKER_ROUTES = frozenset({"research", "rag", "logic_validator"})
+
+
+# 전이 오류(429·timeout·5xx 등) 한정 재시도 — LLM 노드에만 단다. 노드는 순수(state→LLM→dict)라
+# 재시도가 안전하다. dispatch엔 절대 달지 않는다: 재시도가 research·rag·logic_validator 워커를
+# 재호출해 비멱등 실행·SSE 카드 중복을 부른다. (기본값 backoff_factor=2.0·jitter=True를 그대로 쓴다.)
+_LLM_RETRY = RetryPolicy(max_attempts=3)
 
 
 # 노드 단계(stage) 진행 라벨 — 노드 시작 직전 emit해 프론트가 "지금 뭐 하는 중"을 본다.
@@ -96,14 +103,16 @@ def _clarify_branch(state: PlanState) -> Literal["dispatch", "gate"]:
 def build_graph():
     """노드·엣지를 결선한 LangGraph를 컴파일해 돌려준다(프로세스당 1회 캐시)."""
     g: StateGraph = StateGraph(PlanState)
-    g.add_node("confirm_resolve", _staged("confirm_resolve", confirm_resolve_node))
-    g.add_node("segment", _staged("segment", segment_node))
-    g.add_node("classify", _staged("classify", classify_node))
-    g.add_node("correction", _staged("correction", correction_node))
+    # LLM 노드엔 _LLM_RETRY를 단다(전이 오류 재시도). dispatch·integrator는 제외 —
+    # dispatch는 제외 워커(research·rag·logic_validator) 재호출 위험, integrator는 LLM 없는 통과.
+    g.add_node("confirm_resolve", _staged("confirm_resolve", confirm_resolve_node), retry_policy=_LLM_RETRY)
+    g.add_node("segment", _staged("segment", segment_node), retry_policy=_LLM_RETRY)
+    g.add_node("classify", _staged("classify", classify_node), retry_policy=_LLM_RETRY)
+    g.add_node("correction", _staged("correction", correction_node), retry_policy=_LLM_RETRY)
     g.add_node("dispatch", _staged("dispatch", parallel_dispatch_workers_node))
-    g.add_node("extract_fills", _staged("extract_fills", extract_slot_fills_node))
-    g.add_node("gate", _staged("gate", gate_node))
-    g.add_node("conversation", _staged("conversation", conversation_node))
+    g.add_node("extract_fills", _staged("extract_fills", extract_slot_fills_node), retry_policy=_LLM_RETRY)
+    g.add_node("gate", _staged("gate", gate_node), retry_policy=_LLM_RETRY)
+    g.add_node("conversation", _staged("conversation", conversation_node), retry_policy=_LLM_RETRY)
     g.add_node("integrator", _staged("integrator", response_integrator_node))
 
     g.add_edge(START, "confirm_resolve")
