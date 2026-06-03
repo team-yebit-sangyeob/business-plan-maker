@@ -79,7 +79,7 @@ OPTIONAL_SLOTS = tuple(s for s in ALL_SLOTS if s not in REQUIRED_SLOTS)
 
 그래프가 노드 사이로 주고받는 한 턴의 모든 것: `session_id, turn, user_input, messages[],
 turn_segments[], slots{}, correction_log[], turn_validation_reports[], turn_evidence[],
-session_evidence[], pending_clarifications[], pending_question, output_request, pending_confirmations[]`.
+session_evidence[], pending_clarifications[], pending_question, output_request, pending_confirmations[], last_asked_slot`.
 `initial_state()`가 빈 한 벌을 만든다 (슬롯 10개 모두 empty).
 > `pending_confirmations[]`는 **주입을 보류한 슬롯 값 큐**(`PendingConfirmation`). fill이 슬롯 애매(`confirm_kind="slot"`)
 > 거나 결정 미확정(탐색, `confirm_kind="commit"`)으로 본 값을 슬롯 대신 여기 쌓고, 다음 턴 `confirm_resolve`가 사용자 답으로 해소한다.
@@ -318,8 +318,7 @@ agents/orchestrator/
    ├─ correction.py      정정 해소 + 슬롯 채움 (애매하면 pending 큐로 보류)
    ├─ dispatch.py        리서치·RAG 병렬 → 논리검증 2단계 호출
    ├─ gate.py            출력 게이트 Type 0/1/2
-   ├─ integrator.py      응답 통합 (결정론)
-   └─ router.py          (deprecated)
+   └─ integrator.py      응답 통합 (결정론)
 
 agents/conversation/agent.py   대화 에이전트 (intent 선택 + 한 응답 렌더)
 agents/research/               리서치 실 파이프라인 (분해→검색→리포트)
