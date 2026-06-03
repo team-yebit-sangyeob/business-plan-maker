@@ -111,6 +111,17 @@ SLOT_SPECS: dict[str, SlotSpec] = {
 assert set(SLOT_SPECS) == set(ALL_SLOTS), "SLOT_SPECS와 ALL_SLOTS 불일치"
 
 
+# 도구 자체를 설명하는 한 문단 — tool_help(사용법·능력 질문)에 conversation이 답할 때 쓴다.
+# 슬롯별 설명은 SLOT_SPECS가 단일 원천이라 여기 중복하지 않는다(tool_help_text가 둘을 갈라 렌더).
+APP_OVERVIEW: str = (
+    "이건 대화로 사업 계획을 함께 세워가는 도구다. 사업 아이디어를 말하면 계획을 "
+    "문제·타겟·솔루션·시장·차별점·수익모델·목표·리소스·일정·리스크 10개 항목(슬롯)으로 나눠 "
+    "하나씩 채워간다. 말한 내용은 웹 리서치로 외부 사실을 확인하고, 회사 문서로 내부 정합성을 "
+    "따지고, 그 근거가 주장을 뒷받침하는지 논리 검증까지 거친다. 필수 항목(문제·타겟·목표)이 "
+    "차면 계획서를 뽑을 수 있다."
+)
+
+
 def slot_title(slot: str) -> str:
     spec = SLOT_SPECS.get(slot)
     return spec["title"] if spec else slot
@@ -127,6 +138,23 @@ def slot_guide_text() -> str:
         f"{SLOT_SPECS[name]['definition']} | 경계: {SLOT_SPECS[name]['boundary']}"
         for name in ALL_SLOTS
     )
+
+
+def tool_help_text(slot: str | None) -> str:
+    """tool_help(도구/슬롯 메타질문) 응답용 설명을 렌더 — conversation이 이 문구로 답한다.
+
+    slot이 있으면 그 슬롯의 정의·경계·질문 톤을(SLOT_SPECS 단일 원천), 없으면 도구 전체 설명
+    (APP_OVERVIEW)과 슬롯 목록을 돌려준다. 슬롯 텍스트는 SLOT_SPECS에서만 가져와 중복을 막는다.
+    """
+    spec = SLOT_SPECS.get(slot) if slot else None
+    if spec:
+        return (
+            f"{slot} ({spec['title']}) 슬롯: {spec['definition']}\n"
+            f"경계: {spec['boundary']}\n"
+            f"물을 때 톤: {spec['question']}"
+        )
+    slot_list = "\n".join(f"- {SLOT_SPECS[name]['title']}" for name in ALL_SLOTS)
+    return f"{APP_OVERVIEW}\n\n다루는 항목(슬롯):\n{slot_list}"
 
 
 def recent_history(state: PlanState, n: int = 10) -> str:
@@ -152,6 +180,7 @@ UtteranceType = Literal[
     # interaction — 디스패치 없음, conversation이 처리
     "meta",                  # 단순응답·진행 신호. 예: "응 다음", "여기까지 뽑아줘"
     "recall",                # 되묻기 — 직전 대화를 다시 묻거나 확인 → conversation이 대화 이력에서 답. 예: "아까 일본 된다며?"
+    "tool_help",             # 도구/슬롯/사용법 메타질문 → conversation이 SLOT_SPECS·APP_OVERVIEW에서 답(워커 없음). 예: "솔루션 슬롯이 뭐야?", "넌 뭐 할 수 있어?"
 ]
 
 
