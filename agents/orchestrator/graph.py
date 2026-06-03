@@ -52,7 +52,7 @@ _WORKER_ROUTES = frozenset({"research", "rag", "logic_validator"})
 # dispatch는 제외(agent_start/validation_report가 더 풍부 — 중복 방지). integrator도 제외(즉시 통과).
 _STAGE_LABELS: dict[str, str] = {
     "confirm_resolve": "확인 정리하기",
-    "segment": "발화 뜯어보기",
+    "segment": "발화 분석",
     "classify": "유형 분류",
     "correction": "정정 반영",
     "extract_fills": "슬롯 채우기",
