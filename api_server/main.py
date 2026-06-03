@@ -1,6 +1,5 @@
+"""api_server 진입점 — FastAPI 앱 생성(create_app): 키 fail-fast + CORS + 라우터 결선."""
 from __future__ import annotations
-
-import os
 
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
@@ -14,17 +13,14 @@ try:
 except ImportError:  # pragma: no cover
     pass
 
+from common.config import require_openai_key
 from api_server.routes import chat, plan, session
 
 
 def create_app() -> FastAPI:
     # 키 없이는 기동하지 않는다(fail-fast). mock 경로가 없으므로 키가 없으면 첫 LLM 호출에서
     # 어차피 막힌다 — 서버 시작 시점에 명확히 거부해 둔다.
-    if not os.environ.get("OPENAI_API_KEY"):
-        raise RuntimeError(
-            "OPENAI_API_KEY가 없습니다 — api_server는 키 없이 기동할 수 없습니다. "
-            ".env에 OPENAI_API_KEY를 넣으세요."
-        )
+    require_openai_key("server")
 
     app = FastAPI(title="business-plan-maker / api_server")
 

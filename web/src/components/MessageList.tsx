@@ -1,7 +1,27 @@
 import { useEffect, useRef } from "react";
+import ReactMarkdown from "react-markdown";
+import type { Components } from "react-markdown";
+import remarkGfm from "remark-gfm";
 import type { Message } from "../lib/types";
 import { AgentActivity, ThinkingRow } from "./AgentActivity";
 import { PdfCard } from "./PdfCard";
+
+// 봇 메시지 마크다운 렌더 — typography 플러그인 없이 요소별 Tailwind로 기존 디자인과 통일.
+const MD_COMPONENTS: Components = {
+  p: ({ children }) => <p className="mb-2 last:mb-0 leading-relaxed">{children}</p>,
+  ul: ({ children }) => <ul className="list-disc pl-5 space-y-0.5 mb-2 last:mb-0">{children}</ul>,
+  ol: ({ children }) => <ol className="list-decimal pl-5 space-y-0.5 mb-2 last:mb-0">{children}</ol>,
+  li: ({ children }) => <li className="leading-relaxed">{children}</li>,
+  strong: ({ children }) => <strong className="font-semibold">{children}</strong>,
+  a: ({ children, href }) => (
+    <a href={href} target="_blank" rel="noreferrer" className="underline underline-offset-2">
+      {children}
+    </a>
+  ),
+  code: ({ children }) => (
+    <code className="px-1 py-0.5 rounded bg-background/60 font-mono text-[0.85em]">{children}</code>
+  ),
+};
 
 export function MessageList({
   messages,
@@ -41,10 +61,12 @@ export function MessageList({
           <div key={m.id} className="flex justify-start">
             <div className="max-w-[88%] w-full">
               {acts.length > 0 && <AgentActivity items={acts} />}
-              {showThinking && <ThinkingRow />}
+              {showThinking && <ThinkingRow label={m.currentStage} />}
               {m.text && (
-                <div className="mt-2 bg-muted text-foreground rounded-md px-3.5 py-2 text-sm whitespace-pre-wrap">
-                  {m.text}
+                <div className="mt-2 bg-muted text-foreground rounded-md px-3.5 py-2 text-sm">
+                  <ReactMarkdown remarkPlugins={[remarkGfm]} components={MD_COMPONENTS}>
+                    {m.text}
+                  </ReactMarkdown>
                 </div>
               )}
               {m.pdf && (

@@ -9,9 +9,9 @@ TAVILY_API_KEY가 없으면 명확한 에러를 던진다 — 상위 run_researc
 """
 from __future__ import annotations
 
-import os
 from typing import Any, TypedDict
 
+from common.config import require_tavily_key, search_provider, tavily_api_key
 from agents.research._util import traceable
 
 
@@ -40,7 +40,7 @@ def _tavily_search(
 ) -> list[SearchHit]:
     from tavily import TavilyClient
 
-    client = TavilyClient(api_key=os.environ["TAVILY_API_KEY"])
+    client = TavilyClient(api_key=tavily_api_key())
     kwargs: dict[str, Any] = {
         "search_depth": "advanced",
         "include_answer": False,
@@ -77,13 +77,10 @@ def web_search(
 
     상위에서 asyncio.to_thread로 감싸 호출한다(이벤트 루프 비차단).
     """
-    provider = os.environ.get("RESEARCH_SEARCH_PROVIDER", "tavily").strip().lower()
+    provider = search_provider()
 
     if provider == "tavily":
-        if not os.environ.get("TAVILY_API_KEY"):
-            raise RuntimeError(
-                "TAVILY_API_KEY가 없습니다 — 리서치 웹 검색을 실행할 수 없습니다."
-            )
+        require_tavily_key()  # 키 가드(없으면 RuntimeError→상위 폴백). 키 자체는 _tavily_search가 tavily_api_key()로 다시 읽는다
         return _tavily_search(query, max_results, freshness_days, topic)
 
     if provider == "exa":

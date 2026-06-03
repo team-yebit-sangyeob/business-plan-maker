@@ -1,19 +1,24 @@
-"""POST /chat — SSE 스트리밍. Orchestrator 그래프 한 턴 실행 후 이벤트들을 차례로 emit."""
+"""POST /chat — SSE 스트리밍. 그래프 실행 도중 에이전트 활동(agent_start·validation_report)을
+실시간으로 흘리고, 끝나면 응답 토큰·슬롯 변경·done을 순서대로 보낸다."""
 from __future__ import annotations
 
 import asyncio
 import json
+import logging
 from typing import Annotated, AsyncIterator, TypedDict
 
 from fastapi import APIRouter, Body, HTTPException
 from sse_starlette.sse import EventSourceResponse
 
+from common.schema.labels import SourceLabel
 from agents.orchestrator import run_turn
 from agents.orchestrator.progress import set_emitter
 from api_server.session_store import get_store
-from common.schema.labels import SourceLabel
 
 router = APIRouter()
+
+# 흐름을 폴백/예외로 강등하는 지점은 서버 로그에 warning을 남긴다(결정론 변환은 로그 없음).
+logger = logging.getLogger(__name__)
 
 
 class ChatRequest(TypedDict):
@@ -54,7 +59,8 @@ async def _stream(session_id: str, text: str) -> AsyncIterator[dict]:
         set_emitter(queue.put_nowait)
         try:
             result_box["state"] = await run_turn(state, text)
-        except Exception as exc:  # SSE error 이벤트로 변환
+        except Exception as exc:  # SSE error 이벤트로 변환 + 서버 로그에 남김
+            logger.warning("run_turn 실패 → SSE error 변환: %s", exc)
             result_box["error"] = exc
         finally:
             queue.put_nowait(sentinel)  # 소비 루프 종료 보장(성공/실패 공통)
@@ -116,6 +122,7 @@ def _chunk_text(text: str, size: int = 16):
 
 @router.post("/chat")
 async def chat(req: Annotated[ChatRequest, Body()]):
+    """한 턴을 실행하고 진행·응답·슬롯 변경을 SSE로 스트리밍한다(진입 시 세션 없으면 404)."""
     if get_store().get(req["session_id"]) is None:
         raise HTTPException(status_code=404, detail="session not found")
     return EventSourceResponse(_stream(req["session_id"], req["text"]))

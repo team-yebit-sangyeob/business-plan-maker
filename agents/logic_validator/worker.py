@@ -39,6 +39,9 @@ def _report(
         "sources": sources,
         "agreement": agreement,  # type: ignore[typeddict-item]
         "cluster": "logic_validator",
+        # 자기 출처는 만들지 않는다 — 판정 대상인 RAG 청크는 이미 rag 워커가 인용했다(중복 방지).
+        # logic_validator는 agreement(판정)·findings(근거 추론)만 기여한다.
+        "citations": [],
     }
 
 

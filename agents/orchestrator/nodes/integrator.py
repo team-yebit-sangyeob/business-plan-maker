@@ -13,7 +13,12 @@ from __future__ import annotations
 from common.schema import PlanState
 
 
-def response_integrator_node(state: PlanState) -> dict:
+async def response_integrator_node(state: PlanState) -> dict:
+    """이번 턴 명확화(clarify) 대상만 추려 기록한다 → {"pending_clarifications"}(디버깅·세션 표시용, LLM 없음).
+
+    LLM 호출은 없지만, 그래프의 _staged 래퍼가 모든 노드를 `await fn(state)`로 부르므로(다른 8개
+    노드와 동일 계약) async로 둔다 — 동기 함수면 `await <dict>`로 터진다.
+    """
     segments = state.get("turn_segments") or []
     clarifications = [
         text

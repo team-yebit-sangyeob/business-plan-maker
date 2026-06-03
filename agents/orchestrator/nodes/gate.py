@@ -42,7 +42,7 @@ _INTENT_SYSTEM = """오케스트레이터 출력 의도 판정
 사용자 발화가 '지금까지 채워진 슬롯으로 계획서를 뽑아달라는 요청'인지 판정한다.
 
 - wants_output=true 예: "여기까지 뽑아줘", "출력해", "그만 정리해줘", "PDF 만들어"
-- 일반 대화·정보 입력·정정·질문은 false.
+- 그 밖의 일반 대화, 정보 입력, 정정, 질문은 false.
 
 JSON만 출력."""
 
@@ -60,6 +60,7 @@ async def detect_output_request(state: PlanState) -> bool:
 
 
 async def gate_node(state: PlanState) -> dict:
+    """출력 의도를 판정하고 Type 0/1/2를 결정한다 → {"output_request"(, 출력 요청 시 "pending_confirmations": [] — 보류 큐 비움)}."""
     wants_output = await detect_output_request(state)
     if not wants_output:
         return {"output_request": None}

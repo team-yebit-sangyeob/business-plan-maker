@@ -8,8 +8,10 @@ pending_confirmations에 쌓인다. 그러면 conversation이 confirm_slot으로
 decision:
 - pick    → 사용자가 후보 중 하나를 고르거나 긍정 → 그 슬롯에 value 주입, 큐에서 제거.
 - reject  → 넣지 말라(아니/빼) → 큐에서 제거(슬롯은 빈 채).
-- unclear → 그 질문과 무관한 다른 얘기 → attempts++; 한도(2회) 넘으면 제안 슬롯으로
-            자동 확정 후 제거(무한 재질문 방지), 아니면 유지(다음 턴 재질문).
+- unclear → 그 질문과 무관한 다른 얘기 → confirm_kind로 가른다:
+            · "commit"(결정 미확정) → 드롭(결정 안 한 건 안 채운다).
+            · "slot"(값은 결정, 칸만 모름) → attempts++; 한도(2회) 넘으면 제안 슬롯으로
+              자동 확정 후 제거(무한 재질문 방지), 아니면 유지(다음 턴 재질문).
 
 pending이 비어 있으면 no-op이라 일반 턴엔 영향이 없다. 해소 후에도 파이프라인은
 계속 흐른다(같은 발화에 추가 정보가 있으면 segment 이하가 정상 처리). 방금 채운
@@ -33,8 +35,8 @@ _MAX_ATTEMPTS = 2  # 미응답 재질문 한도 — 넘으면 제안(proposed) �
 _CONFIRM_SYSTEM = """오케스트레이터 확인 해소
 직전 턴에 시스템이 "이 값을 어느 슬롯에 넣을지" 사용자에게 물어봤다. 이번 사용자 발화가 그 질문에 대한 답인지 보고 결정한다.
 
-- decision="pick": 사용자가 후보 슬롯 중 하나를 고르거나 긍정("응","맞아","그걸로")했다 → slot=고른 슬롯(긍정이면 제안 슬롯).
-- decision="reject": 넣지 말라거나 부정("아니","빼","둘 다 아냐")했다 → slot=null.
+- decision="pick": 사용자가 후보 슬롯 중 하나를 고르거나 긍정("응", "맞아", "그걸로")했다 → slot=고른 슬롯(긍정이면 제안 슬롯).
+- decision="reject": 넣지 말라거나 부정("아니", "빼", "둘 다 아냐")했다 → slot=null.
 - decision="unclear": 그 질문과 무관한 다른 얘기를 한다 → slot=null.
 
 slot은 반드시 [후보] 중 하나여야 한다. JSON만 출력."""
@@ -46,6 +48,7 @@ class ConfirmOut(BaseModel):
 
 
 async def confirm_resolve_node(state: PlanState) -> dict:
+    """보류된 확인 1건을 사용자 답으로 해소한다 → {"slots"(주입 시), "pending_confirmations"}(없으면 {})."""
     pending = list(state.get("pending_confirmations") or [])
     if not pending:
         return {}
@@ -84,7 +87,11 @@ async def confirm_resolve_node(state: PlanState) -> dict:
     if out.decision == "reject":
         return {"pending_confirmations": rest}
 
-    # unclear — 답을 안 했다. 재질문 한도를 넘으면 제안 슬롯으로 자동 확정.
+    # unclear — 그 질문과 무관한 답을 했다.
+    # commit(결정 자체가 미확정) → 자동 확정하지 않고 드롭한다(결정 안 한 건 안 채운다).
+    if item.get("confirm_kind") == "commit":
+        return {"pending_confirmations": rest}
+    # slot(값은 결정됨, 칸만 모름) → 재질문 한도를 넘으면 제안 슬롯으로 자동 확정.
     attempts = int(item.get("attempts", 0)) + 1
     if attempts >= _MAX_ATTEMPTS:
         _fill(proposed)

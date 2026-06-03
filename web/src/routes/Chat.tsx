@@ -68,16 +68,26 @@ export default function Chat() {
         setMessages((prev) =>
           prev.map((m) => {
             if (m.id !== currentAgentId.current || m.role !== "agent") return m;
+            if (e.type === "stage") {
+              // 진행 단계 라벨 갱신 — 답변 텍스트가 아직 없을 때만 의미 있음
+              return { ...m, currentStage: e.label };
+            }
             if (e.type === "token") {
-              return { ...m, text: m.text + e.text };
+              // 답변이 시작되면 단계 라인은 감춘다(답변으로 전환)
+              return { ...m, text: m.text + e.text, currentStage: undefined };
             }
             if (e.type === "agent_start") {
-              // 새 활동 줄을 '실행 중'으로 추가
+              // 새 활동 줄을 '실행 중'으로 추가 (시작 시각 기록 → 경과 초 표시)
               return {
                 ...m,
                 activities: [
                   ...(m.activities ?? []),
-                  { cluster: e.cluster, subject: e.subject, status: "running" },
+                  {
+                    cluster: e.cluster,
+                    subject: e.subject,
+                    status: "running",
+                    startedAt: Date.now(),
+                  },
                 ],
               };
             }
@@ -97,6 +107,7 @@ export default function Chat() {
                 findings: e.findings,
                 sources: e.sources,
                 agreement: e.agreement,
+                citations: e.citations,
               };
               if (idx >= 0) acts[idx] = done;
               else acts.push(done);
@@ -174,7 +185,6 @@ export default function Chat() {
             <div className="font-mono text-[10px] uppercase tracking-wider text-muted-foreground">
               business plan agent
             </div>
-            <h1 className="text-lg font-semibold mt-0.5">대화로 계획서 짜기</h1>
           </div>
           <div className="flex items-center gap-3">
             {!allRequiredFilled && (
