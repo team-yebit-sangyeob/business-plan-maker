@@ -10,15 +10,11 @@
 from __future__ import annotations
 
 import json
-import logging
 
 from pydantic import BaseModel, Field
 
 from common.schema import ALL_SLOTS, EvidenceRecord
 from common.schema.state import slot_title
-
-
-logger = logging.getLogger(__name__)
 
 
 class SectionNarrative(BaseModel):

@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+import logging
 from typing import Annotated, AsyncIterator, TypedDict
 
 from fastapi import APIRouter, Body, HTTPException
@@ -14,6 +15,9 @@ from api_server.session_store import get_store
 from common.schema.labels import SourceLabel
 
 router = APIRouter()
+
+# 흐름을 폴백/예외로 강등하는 지점은 서버 로그에 warning을 남긴다(결정론 변환은 로그 없음).
+logger = logging.getLogger(__name__)
 
 
 class ChatRequest(TypedDict):
@@ -54,7 +58,8 @@ async def _stream(session_id: str, text: str) -> AsyncIterator[dict]:
         set_emitter(queue.put_nowait)
         try:
             result_box["state"] = await run_turn(state, text)
-        except Exception as exc:  # SSE error 이벤트로 변환
+        except Exception as exc:  # SSE error 이벤트로 변환 + 서버 로그에 남김
+            logger.warning("run_turn 실패 → SSE error 변환: %s", exc)
             result_box["error"] = exc
         finally:
             queue.put_nowait(sentinel)  # 소비 루프 종료 보장(성공/실패 공통)
