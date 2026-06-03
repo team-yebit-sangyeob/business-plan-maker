@@ -3,8 +3,8 @@ from __future__ import annotations
 
 from fastapi import APIRouter, HTTPException
 
-from api_server.session_store import get_store
 from common.schema.labels import SourceLabel
+from api_server.session_store import get_store
 
 router = APIRouter()
 

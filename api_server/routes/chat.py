@@ -9,10 +9,10 @@ from typing import Annotated, AsyncIterator, TypedDict
 from fastapi import APIRouter, Body, HTTPException
 from sse_starlette.sse import EventSourceResponse
 
+from common.schema.labels import SourceLabel
 from agents.orchestrator import run_turn
 from agents.orchestrator.progress import set_emitter
 from api_server.session_store import get_store
-from common.schema.labels import SourceLabel
 
 router = APIRouter()
 
