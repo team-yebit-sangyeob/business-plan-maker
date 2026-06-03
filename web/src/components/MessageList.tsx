@@ -41,7 +41,7 @@ export function MessageList({
           <div key={m.id} className="flex justify-start">
             <div className="max-w-[88%] w-full">
               {acts.length > 0 && <AgentActivity items={acts} />}
-              {showThinking && <ThinkingRow />}
+              {showThinking && <ThinkingRow label={m.currentStage} />}
               {m.text && (
                 <div className="mt-2 bg-muted text-foreground rounded-md px-3.5 py-2 text-sm whitespace-pre-wrap">
                   {m.text}

@@ -41,10 +41,41 @@ from agents.orchestrator.nodes.confirm import confirm_resolve_node
 from agents.orchestrator.nodes.dispatch import parallel_dispatch_workers_node
 from agents.orchestrator.nodes.gate import gate_node
 from agents.orchestrator.nodes.integrator import response_integrator_node
+from agents.orchestrator.progress import emit
 from agents.conversation.agent import conversation_node
 
 
 _WORKER_ROUTES = frozenset({"research", "rag", "logic_validator"})
+
+
+# 노드 단계(stage) 진행 라벨 — 노드 시작 직전 emit해 프론트가 "지금 뭐 하는 중"을 본다.
+# dispatch는 제외(agent_start/validation_report가 더 풍부 — 중복 방지). integrator도 제외(즉시 통과).
+_STAGE_LABELS: dict[str, str] = {
+    "confirm_resolve": "확인 정리하기",
+    "segment": "발화 뜯어보기",
+    "classify": "유형 분류",
+    "correction": "정정 반영",
+    "extract_fills": "슬롯 채우기",
+    "gate": "출력 판단",
+    "conversation": "답변 작성",
+}
+
+
+def _staged(name: str, fn):
+    """노드를 감싸 시작 직전 stage 이벤트를 emit한다(라벨 있을 때만).
+
+    emit은 progress.py의 ContextVar emitter로 흐른다 — 미설정(테스트·직접 호출) 시 no-op이라
+    노드 동작엔 영향이 없다. dispatch의 agent_start와 같은 "호출 직전 발행" 패턴.
+    """
+    label = _STAGE_LABELS.get(name)
+
+    async def wrapped(state: PlanState) -> dict:
+        if label:
+            emit({"type": "stage", "node": name, "label": label})
+        return await fn(state)
+
+    wrapped.__name__ = getattr(fn, "__name__", name)
+    return wrapped
 
 
 def _clarify_branch(state: PlanState) -> Literal["dispatch", "gate"]:
@@ -64,15 +95,15 @@ def _clarify_branch(state: PlanState) -> Literal["dispatch", "gate"]:
 @lru_cache(maxsize=1)
 def build_graph():
     g: StateGraph = StateGraph(PlanState)
-    g.add_node("confirm_resolve", confirm_resolve_node)
-    g.add_node("segment", segment_node)
-    g.add_node("classify", classify_node)
-    g.add_node("correction", correction_node)
-    g.add_node("dispatch", parallel_dispatch_workers_node)
-    g.add_node("extract_fills", extract_slot_fills_node)
-    g.add_node("gate", gate_node)
-    g.add_node("conversation", conversation_node)
-    g.add_node("integrator", response_integrator_node)
+    g.add_node("confirm_resolve", _staged("confirm_resolve", confirm_resolve_node))
+    g.add_node("segment", _staged("segment", segment_node))
+    g.add_node("classify", _staged("classify", classify_node))
+    g.add_node("correction", _staged("correction", correction_node))
+    g.add_node("dispatch", _staged("dispatch", parallel_dispatch_workers_node))
+    g.add_node("extract_fills", _staged("extract_fills", extract_slot_fills_node))
+    g.add_node("gate", _staged("gate", gate_node))
+    g.add_node("conversation", _staged("conversation", conversation_node))
+    g.add_node("integrator", _staged("integrator", response_integrator_node))
 
     g.add_edge(START, "confirm_resolve")
     g.add_edge("confirm_resolve", "segment")

@@ -68,8 +68,13 @@ export default function Chat() {
         setMessages((prev) =>
           prev.map((m) => {
             if (m.id !== currentAgentId.current || m.role !== "agent") return m;
+            if (e.type === "stage") {
+              // 진행 단계 라벨 갱신 — 답변 텍스트가 아직 없을 때만 의미 있음
+              return { ...m, currentStage: e.label };
+            }
             if (e.type === "token") {
-              return { ...m, text: m.text + e.text };
+              // 답변이 시작되면 단계 라인은 감춘다(답변으로 전환)
+              return { ...m, text: m.text + e.text, currentStage: undefined };
             }
             if (e.type === "agent_start") {
               // 새 활동 줄을 '실행 중'으로 추가

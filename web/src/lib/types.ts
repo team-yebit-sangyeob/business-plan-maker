@@ -64,6 +64,7 @@ export type ClusterName = "research" | "rag" | "logic_validator";
 
 export type ChatEvent =
   | { type: "token"; text: string }
+  | { type: "stage"; node: string; label: string }
   | { type: "agent_start"; cluster: ClusterName; subject: string }
   | {
       type: "validation_report";
@@ -129,5 +130,6 @@ export type Message =
       role: "agent";
       text: string;
       activities?: AgentActivity[];
+      currentStage?: string; // 진행 중인 노드 단계 라벨(답변 텍스트 도착 전까지 표시)
       pdf?: PlanCard;
     };

@@ -15,15 +15,16 @@ function ClusterBadge({ cluster }: { cluster: Activity["cluster"] }) {
   );
 }
 
-/** 첫 이벤트 도착 전 즉시 띄우는 일반 로딩 표시 — 어떤 에이전트인지 정해지기 전 공백을 메운다. */
-export function ThinkingRow() {
+/** 진행 단계(stage) 라인 — 현재 노드 단계 라벨을 스피너와 함께 띄운다.
+ *  label이 없으면(첫 이벤트 도착 전) 일반 "생각 중…"으로 공백을 메운다. */
+export function ThinkingRow({ label }: { label?: string }) {
   return (
     <div className="mt-2 flex items-center gap-2 border border-border rounded-md bg-muted/40 px-3 py-2">
       <span
         className="shrink-0 w-3 h-3 rounded-full border-2 border-muted-foreground/30 border-t-muted-foreground animate-spin"
         aria-label="생각 중"
       />
-      <span className="text-xs text-muted-foreground">생각 중…</span>
+      <span className="text-xs text-muted-foreground">{label ?? "생각 중…"}</span>
     </div>
   );
 }
