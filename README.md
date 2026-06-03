@@ -102,12 +102,7 @@ python vector_db_store/src/build_chroma_db.py
 
 ---
 
-## 4. 테스트
-
-```bash
-source .venv/bin/activate
-pytest tests/
-```
+## 4. 빠른 동작 확인
 
 오케스트레이터 그래프 구성만 빠르게 확인(키 불필요 — 빌드만):
 
