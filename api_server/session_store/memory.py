@@ -1,4 +1,4 @@
-"""인메모리 세션 저장소 (dev용). 영속화는 비범위."""
+"""인메모리 세션 저장소 (dev용). 영속화는 범위 밖."""
 from __future__ import annotations
 
 import uuid

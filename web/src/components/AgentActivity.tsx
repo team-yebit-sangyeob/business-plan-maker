@@ -16,7 +16,7 @@ function ClusterBadge({ cluster }: { cluster: Activity["cluster"] }) {
 }
 
 /** 진행 단계(stage) 라인 — 현재 노드 단계 라벨을 스피너와 함께 띄운다.
- *  label이 없으면(첫 이벤트 도착 전) 일반 "생각 중…"으로 공백을 메운다. */
+ *  label이 없으면(첫 이벤트 도착 전) 기본 "생각 중…"으로 공백을 메운다. */
 export function ThinkingRow({ label }: { label?: string }) {
   return (
     <div className="mt-2 flex items-center gap-2 border border-border rounded-md bg-muted/40 px-3 py-2">
