@@ -228,6 +228,7 @@ async def extract_slot_fills_node(state: PlanState) -> dict:
 
     valid = set(ALL_SLOTS)
     empty_set = set(empty_slots)
+    last_asked = state.get("last_asked_slot")            # 직전 어시스턴트가 ask_slot으로 물은 슬롯
     pending = list(state.get("pending_confirmations") or [])
     queued = {p.get("proposed_slot") for p in pending}  # 이미 확인 대기 중인 슬롯
     decided: set[str] = set()                            # 이번 턴에 쓰거나 큐에 넣은 슬롯
@@ -254,9 +255,13 @@ async def extract_slot_fills_node(state: PlanState) -> dict:
         if not value or fill.slot not in valid:
             continue
 
+        # 직전에 물은 슬롯에 대한 답이면 결정으로 본다(짧은 명사구라도). LLM이 보수적으로
+        # exploration을 줘도 결정론으로 승격해, 정상 슬롯 답변이 확인 질문으로 새는 걸 막는다.
+        kind = "decision" if fill.slot == last_asked else fill.kind
+
         # 탐색 — 결정이 아니다. 슬롯에 바로 박지 않고, 채울 수 있는 빈 슬롯이면 확인 큐로
         # (다음 턴 confirm_resolve가 "이거 X에 넣을까요?" 답으로 해소). 빈 슬롯 아니면 스킵.
-        if fill.kind != "decision":
+        if kind != "decision":
             if commit_queued or fill.slot not in empty_set:
                 continue
             if fill.slot in decided or fill.slot in queued:

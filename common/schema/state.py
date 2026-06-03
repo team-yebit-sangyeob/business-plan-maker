@@ -282,6 +282,7 @@ def initial_state() -> "PlanState":
         "pending_question": "",
         "output_request": None,
         "pending_confirmations": [],
+        "last_asked_slot": None,
         "turn_evidence": [],
         "session_evidence": [],
     }
@@ -311,3 +312,6 @@ class PlanState(TypedDict, total=False):
     output_request: Literal["type0", "type1", "type2"] | None
     # 애매해서 주입 보류된 확인 큐 — 한 번에 하나씩 confirm_slot으로 묻는다. 턴 넘어 영속.
     pending_confirmations: list[PendingConfirmation]
+    # 어시스턴트가 직전에 ask_slot으로 물은 슬롯(턴 넘어 영속). fill이 "직전 질문에 직접 답"
+    # (kind=decision 기준 (b))을 결정론으로 잡는 근거 — 그 슬롯에 대한 답이면 짧은 명사구라도 결정.
+    last_asked_slot: str | None

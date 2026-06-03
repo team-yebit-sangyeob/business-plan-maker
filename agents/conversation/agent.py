@@ -243,4 +243,10 @@ async def conversation_node(state: PlanState) -> dict:
     )
     out = await call_json(_SYSTEM, payload, ConversationOut)
     message = out.message.strip()
-    return {"pending_question": message}
+    result: dict = {"pending_question": message}
+    # ask_slot을 실제로 물었으면 그 슬롯을 기록 — 다음 턴 fill이 "직전 질문에 직접 답"을
+    # 결정론으로 잡는다(kind=decision 기준 (b)). 안 물은 턴엔 이 키를 안 내보내 이전 값 유지.
+    asked = next((i["slot"] for i in intents if i.get("type") == "ask_slot"), None)
+    if asked is not None:
+        result["last_asked_slot"] = asked
+    return result
