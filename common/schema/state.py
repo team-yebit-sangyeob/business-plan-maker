@@ -112,7 +112,7 @@ assert set(SLOT_SPECS) == set(ALL_SLOTS), "SLOT_SPECS와 ALL_SLOTS 불일치"
 
 
 # 도구 자체를 설명하는 한 문단 — tool_help(사용법·능력 질문)에 conversation이 답할 때 쓴다.
-# 슬롯별 설명은 SLOT_SPECS가 단일 원천이라 여기 중복하지 않는다(tool_help_text가 둘을 갈라 렌더).
+# 슬롯별 설명은 SLOT_SPECS가 단일 원천이라 여기 중복하지 않는다(tool_help_text가 둘을 합쳐 렌더).
 APP_OVERVIEW: str = (
     "이건 대화로 사업 계획을 함께 세워가는 도구다. 사업 아이디어를 말하면 계획을 "
     "문제·타겟·솔루션·시장·차별점·수익모델·목표·리소스·일정·리스크 10개 항목(슬롯)으로 나눠 "
@@ -140,30 +140,19 @@ def slot_guide_text() -> str:
     )
 
 
-def tool_help_text(slot: str | None, scope: str = "general") -> str:
-    """tool_help(도구/슬롯 메타질문) 응답용 설명을 렌더 — conversation이 이 문구로 답한다.
+def tool_help_text() -> str:
+    """tool_help(도구/슬롯 메타질문) 응답용 '참고 자료' 한 덩이 — 도구 전체 설명 + 슬롯 정의 전부.
 
-    scope로 셋을 가른다(슬롯 텍스트는 SLOT_SPECS 단일 원천에서만 가져와 중복을 막는다):
-    - "slot"    → 그 슬롯의 정의·경계·질문 톤(특정 슬롯 1개를 물음). slot 인자만 줘도 같다.
-    - "all"     → 슬롯마다 '제목: 정의' 한 줄(각/모든 슬롯의 역할을 물음). 경계·질문 톤은
-                  사용자 답엔 과해 빼고, 정의만 빠짐없이 준다.
-    - "general" → 도구 전체 설명(APP_OVERVIEW)과 슬롯 제목 목록(사용법·능력을 물음).
+    어느 슬롯을·얼마나 답할지(특정 1개 / 여럿 / 전체 / 도구 개요)는 코드가 가르지 않는다 —
+    conversation이 사용자 질문(subject)에 맞춰 이 재료에서 필요한 만큼 골라 답한다. 슬롯
+    텍스트는 SLOT_SPECS 단일 원천에서만 가져온다(설명이 갈리지 않게).
     """
-    spec = SLOT_SPECS.get(slot) if slot else None
-    if spec and scope != "all":
-        return (
-            f"{slot} ({spec['title']}) 슬롯: {spec['definition']}\n"
-            f"경계: {spec['boundary']}\n"
-            f"물을 때 톤: {spec['question']}"
-        )
-    if scope == "all":
-        per_slot = "\n".join(
-            f"- {SLOT_SPECS[name]['title']}: {SLOT_SPECS[name]['definition']}"
-            for name in ALL_SLOTS
-        )
-        return f"이 도구가 채우는 항목(슬롯) {len(ALL_SLOTS)}개:\n{per_slot}"
-    slot_list = "\n".join(f"- {SLOT_SPECS[name]['title']}" for name in ALL_SLOTS)
-    return f"{APP_OVERVIEW}\n\n다루는 항목(슬롯):\n{slot_list}"
+    per_slot = "\n".join(
+        f"- {SLOT_SPECS[name]['title']}: {SLOT_SPECS[name]['definition']} "
+        f"(경계: {SLOT_SPECS[name]['boundary']})"
+        for name in ALL_SLOTS
+    )
+    return f"{APP_OVERVIEW}\n\n슬롯(항목) 정의:\n{per_slot}"
 
 
 def recent_history(state: PlanState, n: int = 10) -> str:
