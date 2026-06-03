@@ -202,13 +202,46 @@ class PendingConfirmation(TypedDict, total=False):
     attempts: int               # 재질문 횟수 — 2회 이상 미응답이면 proposed로 자동 확정
 
 
+class Citation(TypedDict, total=False):
+    # 근거 1건의 구조화 출처 — research/RAG를 한 타입으로 표현한다. 그동안 sources:list[str]로
+    # 납작하게 버려지던 제목·인용문·페이지·관련도·접근일을 보존해 계획서가 출처를 자세히 인용한다.
+    # 예(research): {"cluster":"research","title":"콘진원 2024 백서","url":"https://...",
+    #               "snippet":"매출 1.8조","score":0.82,"score_kind":"relevance","accessed_at":"2026-06-03"}
+    # 예(rag):      {"cluster":"rag","title":"영업역량.pdf","source_file":"영업역량.pdf","page":"7",
+    #               "folder":"report","snippet":"B2B 영업망 12개사","score_kind":"none"}
+    cluster: Literal["research", "rag", "logic_validator"]
+    title: str          # research=출처 제목 / rag=파일명
+    url: str            # research만 (rag는 "")
+    snippet: str        # research=근거 한 줄 / rag=highlight 또는 raw_source 발췌
+    source_file: str    # rag만
+    page: str           # rag만 (RagExtractorResult.source_page)
+    folder: str         # rag만 (paper/report/proposal/etc)
+    score: float        # research=relevance(0~1) / 없으면 0
+    score_kind: Literal["relevance", "similarity_pct", "none"]  # score 해석 단위(none이면 표시 생략)
+    accessed_at: str    # 수집 시점 ISO 날짜
+
+
 class ValidationReport(TypedDict, total=False):
     # 워커 한 번의 결과. 예: 리서치가 "게임 시장 포화" 주장을 검증
     subject: str                                                       # "게임 시장이 포화 상태다"
     findings: list[str]                                                # ["2024년 모바일 게임 신규 출시 -12%", ...]
-    sources: list[str]                                                 # ["https://...", "업계 리포트 X"]
+    sources: list[str]                                                 # ["https://...", "업계 리포트 X"] — SSE/프론트 계약(유지)
     agreement: Literal["confirms", "contradicts", "partial", "unknown"]# 사용자 주장과의 일치도
     cluster: Literal["research", "rag", "logic_validator"]             # 어느 워커가 냈는지
+    citations: list[Citation]                                          # 구조화 출처(부가). 없으면 빈 리스트로 본다.
+
+
+class EvidenceRecord(TypedDict, total=False):
+    # 세션 전체에 누적되는 근거 1건 — ValidationReport에 "어느 슬롯을 지지하는지"를 더한 형태.
+    # turn_validation_reports는 매 턴 리셋되므로, 계획서가 세션 동안 모은 근거를 모두 인용하려면
+    # 이렇게 영속 누적분(session_evidence)으로 따로 쌓는다(run_turn이 적재·중복제거).
+    subject: str
+    cluster: Literal["research", "rag", "logic_validator"]
+    findings: list[str]
+    agreement: Literal["confirms", "contradicts", "partial", "unknown"]
+    citations: list[Citation]
+    target_slot: str | None   # 이 근거가 지지하는 슬롯(없으면 끝 출처목록에만 실림)
+    turn: int                 # 적재된 턴(디버그/정렬용)
 
 
 class VerificationRequest(TypedDict, total=False):
@@ -246,6 +279,8 @@ def initial_state() -> "PlanState":
         "pending_question": "",
         "output_request": None,
         "pending_confirmations": [],
+        "turn_evidence": [],
+        "session_evidence": [],
     }
 
 
@@ -261,6 +296,11 @@ class PlanState(TypedDict, total=False):
     # 이번 턴 dispatch가 낸 리포트만 — 매 턴 리셋. 대화 에이전트의 결과 보고와
     # SSE 에이전트 활동 표시에 쓴다.
     turn_validation_reports: list[ValidationReport]
+    # 이번 턴 dispatch가 낸 근거를 슬롯 연결정보와 함께 — 매 턴 리셋. run_turn이 끝에서
+    # session_evidence로 합친다(turn_validation_reports는 SSE 계약 유지 위해 그대로 둔다).
+    turn_evidence: list[EvidenceRecord]
+    # 세션 전체에 누적된 근거 — 턴을 넘어 영속(중복 제거). 계획서(planner)가 출처를 인용하는 원천.
+    session_evidence: list[EvidenceRecord]
 
     pending_clarifications: list[str]
     pending_question: str
