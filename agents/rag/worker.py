@@ -76,6 +76,7 @@ async def run_rag_check(
 
     # 구조화 출처 — RagExtractorResult가 이미 쥐고 있던 파일/페이지/폴더/원문을 보존한다(평탄화 중단).
     # similarity_pct는 검색 툴 루프 안에서만 살고 RagExtractorResult엔 안 실리므로 score_kind="none".
+    # raw_source(원문 청크 전체)는 UI '원문 보기'용으로 함께 실어 보낸다 — snippet은 짧은 하이라이트.
     citations: list[Citation] = []
     if source_file:
         raw = (result.get("raw_source") or "").strip()
@@ -91,6 +92,7 @@ async def run_rag_check(
                 "score": 0.0,
                 "score_kind": "none",
                 "accessed_at": date.today().isoformat(),
+                "raw_source": raw,
             }
         )
 

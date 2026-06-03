@@ -222,6 +222,8 @@ class Citation(TypedDict, total=False):
     score: float        # research=relevance(0~1) / 없으면 0
     score_kind: Literal["relevance", "similarity_pct", "none"]  # score 해석 단위(none이면 표시 생략)
     accessed_at: str    # 수집 시점 ISO 날짜
+    raw_source: str     # rag만 — 선별된 원문 청크 전체(UI '원문 보기'용). snippet은 짧은 하이라이트.
+                        # planner는 안 읽으므로(계획서/프롬프트 불변) 비용은 세션 메모리뿐.
 
 
 class ValidationReport(TypedDict, total=False):
