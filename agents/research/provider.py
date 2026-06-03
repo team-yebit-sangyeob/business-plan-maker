@@ -80,7 +80,7 @@ def web_search(
     provider = search_provider()
 
     if provider == "tavily":
-        require_tavily_key()  # 키 없으면 여기서 RuntimeError(상위 run_research가 폴백)
+        require_tavily_key()  # 키 가드(없으면 RuntimeError→상위 폴백). 키 자체는 _tavily_search가 tavily_api_key()로 다시 읽는다
         return _tavily_search(query, max_results, freshness_days, topic)
 
     if provider == "exa":

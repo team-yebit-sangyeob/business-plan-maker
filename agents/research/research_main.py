@@ -24,7 +24,7 @@ from agents.research._util import today_iso, traceable
 
 logger = logging.getLogger(__name__)
 
-MODEL = research_model()
+MODEL = research_model()  # 모듈 로드 시 1회 고정(런타임 중 모델 교체는 상정 안 함)
 
 _DEFAULT_FRESHNESS_DAYS = 180
 

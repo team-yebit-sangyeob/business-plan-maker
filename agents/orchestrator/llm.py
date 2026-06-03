@@ -1,7 +1,8 @@
 """LLM 호출 헬퍼 — pydantic JSON 강제 출력.
 
 mock/live 모드 분기는 없다. `OPENAI_API_KEY`가 없으면 실행 자체가 막힌다(fail-fast) —
-`call_json`은 키가 없으면 즉시 RuntimeError를 던진다. 모델은 `BPM_LLM_MODEL`로 교체 가능.
+`call_json`은 키가 없으면 즉시 RuntimeError를 던진다. 모델은 `BPM_LLM_MODEL`로 교체 가능
+(키 확인·모델 읽기는 `common/config.py`의 `require_openai_key`·`orchestrator_model` 경유).
 """
 from __future__ import annotations
 
