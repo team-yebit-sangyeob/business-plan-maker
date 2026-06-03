@@ -14,16 +14,22 @@ correction_node: utterance_types에 correction 포함 세그먼트만 모아 LLM
   예: 슬롯 target="네이버·카카오" 상태에서 "카카오는 빼자"
       → action: replace target = "네이버" (또는 맥락상 clear)
 
-extract_slot_fills_node: 정정 이후 단계에서, claim 세그먼트 중
-  '비어 있는' 슬롯에 들어맞는 값을 골라 채움(이미 찬 슬롯은 안 건드림).
-  명확(confidence=clear)하면 즉시 주입하고, 어느 슬롯인지 애매(ambiguous)하면
-  주입하지 않고 pending_confirmations에 쌓아 다음 턴 confirm_resolve가 사용자
-  답으로 확정한다("이거 솔루션이에요 차별점이에요?").
+extract_slot_fills_node: 정정 이후 단계에서, claim 세그먼트 중 '비어 있는' 슬롯에
+  들어맞는 값을 골라 처리한다(이미 찬 슬롯은 안 건드림). 두 축으로 가른다 —
+  kind(결정/탐색)와 confidence(슬롯 명확/애매):
+  - 결정 + 슬롯 명확 → 즉시 주입.
+  - 결정 + 슬롯 애매 → 주입 보류, pending_confirmations(confirm_kind="slot")에 쌓아
+    다음 턴 confirm_resolve가 "이거 솔루션이에요 차별점이에요?" 답으로 확정.
+  - 탐색(아직 안 정함) → 주입 안 함. 채울 수 있는 빈 슬롯이면 pending_confirmations
+    (confirm_kind="commit")에 쌓아 "이거 X에 넣을까요?"를 묻는다(턴당 1건). 미응답이면
+    confirm_resolve가 드롭한다(결정 안 한 건 안 채운다).
 
-  예: 빈 슬롯 [target, goal] + 세그먼트 "(claim) 타겟은 네이버 콘텐츠 운영팀"
-      → fills: target = "네이버 콘텐츠 운영팀" (source=user, clear). goal은 근거 없으면 그대로 빔.
+  예: 직전에 "타겟이 누구예요?" 물음 + 세그먼트 "(claim) 네이버 콘텐츠 운영팀"
+      → fills: target = "네이버 콘텐츠 운영팀" (kind=decision, clear) → 즉시 주입.
   예: 세그먼트 "(claim) AI로 자동 검수해주는 거" → solution/advantage 경계 → ambiguous
-      → 주입 보류, pending_confirmations += {value, proposed=solution, candidates=[solution,advantage]}
+      → 보류, pending += {value, proposed=solution, candidates=[solution,advantage], confirm_kind=slot}
+  예: 세그먼트 "(claim) 일본 시장도 괜찮으려나?" → kind=exploration
+      → 보류, pending += {value, proposed=market, candidates=[market], confirm_kind=commit}
 """
 from __future__ import annotations
 
@@ -33,7 +39,12 @@ from pydantic import BaseModel, Field
 
 from common.schema import PlanState, Correction
 from common.schema.labels import SourceLabel
-from common.schema.state import ALL_SLOTS, PendingConfirmation, slot_guide_text
+from common.schema.state import (
+    ALL_SLOTS,
+    PendingConfirmation,
+    recent_history,
+    slot_guide_text,
+)
 from agents.orchestrator.llm import call_json
 
 
@@ -148,12 +159,21 @@ _FILL_SYSTEM = (
 각 채움(fill)마다:
 - slot: 위 정의와 경계에 비춰 값이 깔끔하게 들어맞는 슬롯.
 - value: 채울 값.
+- kind: 값이 슬롯에 박히는 "결정"인지, 아직 박으면 안 되는 "탐색"인지 가린다.
+  - "decision": (a) 사용자가 값을 명시적으로 확정한다 — "X로 하자/가자/확정/정했어/그걸로" 같은 약속, 또는
+    (b) 직전에 어시스턴트가 물은 슬롯 질문([직전 대화] 참고)에 사용자가 그 슬롯의 값으로 직접 답한다.
+  - "exploration": 단순 탐색·가설·비교·생각 말하기 — "X가 좋을 것 같은데", "X는 어때?", "아마 X일 수도". 아직 정한 게 아니다.
+  - 애매하면 "exploration"으로 둔다.
 - confidence: 경계 규칙으로 한 슬롯에 명확히 들어맞으면 "clear", 두 슬롯 이상에 그럴듯해 단정하기 어려우면 "ambiguous".
 - alt_slots: "ambiguous"일 때 함께 후보가 되는 다른 슬롯들(명확하면 빈 배열).
 - reason: "ambiguous"라면 왜 헷갈리는지 한 구절(예: "과금 방식이자 솔루션 형태로 모두 읽힘").
 
 세그먼트에 붙은 [힌트:슬롯]은 참고만 한다 — 정의와 경계가 우선이다.
 이미 채워진 슬롯은 건드리지 마라(정정 노드가 처리함). 억지로 하나로 밀어넣지 말고, 진짜 경계선이면 "ambiguous"로 둔다.
+
+kind 예:
+- [직전 대화] [assistant] "타겟이 누구예요?" / [user] "네이버 콘텐츠 운영팀" → target, kind=decision (물은 슬롯에 직접 답)
+- [user] "일본 시장도 괜찮으려나?" → market, kind=exploration (아직 정한 게 아님)
 
 JSON만 출력."""
 )
@@ -162,6 +182,7 @@ JSON만 출력."""
 class FillItem(BaseModel):
     slot: str
     value: str
+    kind: Literal["decision", "exploration"] = "exploration"  # 결정/탐색 — exploration은 확인 후에만 채운다
     confidence: Literal["clear", "ambiguous"] = "clear"  # 기본 clear (하위호환)
     alt_slots: list[str] = Field(default_factory=list)   # ambiguous일 때 다른 후보
     reason: str = ""                                     # 왜 애매한지(확인 질문 문구용)
@@ -190,7 +211,9 @@ async def extract_slot_fills_node(state: PlanState) -> dict:
 
     # 세그먼트 힌트(segment의 target_slot)를 prior로 같이 넘긴다 — 슬롯 결정은 fill이
     # 단일 권위로 하되, segment가 본 슬롯을 참고하게 해 두 판단이 갈리는 걸 줄인다.
+    # [직전 대화]는 kind 판정 (b)("어시스턴트가 방금 물은 슬롯에 직접 답했나")의 근거다.
     user_payload = (
+        "[직전 대화]\n" + recent_history(state, n=4) + "\n\n"
         "[현재 슬롯]\n" + _slot_snapshot_lines(state) + "\n\n"
         f"[비어있는 슬롯]\n{', '.join(empty_slots)}\n\n"
         "[세그먼트]\n"
@@ -208,15 +231,43 @@ async def extract_slot_fills_node(state: PlanState) -> dict:
     pending = list(state.get("pending_confirmations") or [])
     queued = {p.get("proposed_slot") for p in pending}  # 이미 확인 대기 중인 슬롯
     decided: set[str] = set()                            # 이번 턴에 쓰거나 큐에 넣은 슬롯
+    commit_queued = False                                # 탐색 확인은 턴당 1건만(질문 폭주 방지)
+
+    def _queue(slot: str, candidate_slots: list[str], confirm_kind: str, value: str, reason: str) -> None:
+        # 주입하지 말고 사용자 확인 큐로(다음 턴 confirm_resolve가 해소).
+        pending.append(
+            {
+                "value": value,
+                "proposed_slot": slot,
+                "candidate_slots": candidate_slots or [slot],
+                "source_text": value,
+                "reason": reason,
+                "attempts": 0,
+                "confirm_kind": confirm_kind,
+            }
+        )
+        queued.add(slot)
+        decided.add(slot)
 
     for fill in out.fills:
         value = (fill.value or "").strip()
         if not value or fill.slot not in valid:
             continue
 
+        # 탐색 — 결정이 아니다. 슬롯에 바로 박지 않고, 채울 수 있는 빈 슬롯이면 확인 큐로
+        # (다음 턴 confirm_resolve가 "이거 X에 넣을까요?" 답으로 해소). 빈 슬롯 아니면 스킵.
+        if fill.kind != "decision":
+            if commit_queued or fill.slot not in empty_set:
+                continue
+            if fill.slot in decided or fill.slot in queued:
+                continue
+            _queue(fill.slot, [fill.slot], "commit", value, (fill.reason or "").strip())
+            commit_queued = True
+            continue
+
         ambiguous = fill.confidence == "ambiguous" or bool(fill.alt_slots)
         if not ambiguous:
-            # 명확 — 빈 슬롯이면 즉시 주입
+            # 결정 + 슬롯 명확 — 빈 슬롯이면 즉시 주입
             if fill.slot not in empty_set or fill.slot in decided:
                 continue
             slots[fill.slot] = {
@@ -233,24 +284,14 @@ async def extract_slot_fills_node(state: PlanState) -> dict:
                     break
             continue
 
-        # 애매 — 주입하지 말고 사용자 확인 큐로(다음 턴 confirm_resolve가 해소)
+        # 결정 + 슬롯 애매 — 어느 슬롯인지 확인 큐로
         candidate_slots = [s for s in [fill.slot, *fill.alt_slots] if s in valid]
         # 후보 중 채울 수 있는(빈) 슬롯이 하나도 없으면 물어봐야 의미 없음 → 스킵
         if not any(s in empty_set for s in candidate_slots):
             continue
         if fill.slot in decided or fill.slot in queued:
             continue
-        item: PendingConfirmation = {
-            "value": value,
-            "proposed_slot": fill.slot,
-            "candidate_slots": candidate_slots or [fill.slot],
-            "source_text": value,
-            "reason": (fill.reason or "").strip(),
-            "attempts": 0,
-        }
-        pending.append(item)
-        queued.add(fill.slot)
-        decided.add(fill.slot)
+        _queue(fill.slot, candidate_slots, "slot", value, (fill.reason or "").strip())
 
     return {
         "slots": slots,

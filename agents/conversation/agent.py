@@ -49,7 +49,7 @@ _SYSTEM = """대화 에이전트
   - redirect: 스코프 밖 발화를 부드럽게 넘기고 본론으로 잇는다.
   - reject_output: 필수 슬롯이 미달이라 지금은 출력이 이르다고 알리고, 무엇을 채우면 되는지 안내한다.
   - deliver_plan: 계획서를 뽑을 수 있다고 안내한다(type2면 빈 항목은 [미정]으로 들어간다고 덧붙인다).
-  - confirm_slot: 방금 사용자가 말한 값이 어느 슬롯인지 애매할 때, 그 값과 후보 슬롯들을 제시하고 "어디에 넣을까요?"를 한 문장으로 묻는다. 사용자가 답하기 전엔 다음 슬롯 질문(ask_slot)은 하지 않는다.
+  - confirm_slot: 방금 사용자가 말한 값을 슬롯에 넣기 전에 확인한다. 후보 슬롯이 둘 이상이면 그 값과 후보들을 제시하고 "어디에 넣을까요?"를 한 문장으로 묻고, 후보가 하나면 "이거 [그 슬롯]에 넣어둘까요?"처럼 넣을지 말지를 한 문장으로 묻는다(사용자가 아직 정하지 않고 떠본 값이다). 사용자가 답하기 전엔 다음 슬롯 질문(ask_slot)은 하지 않는다.
   - ask_slot: 다음 채울 슬롯을 맥락 있게 한 문장으로 묻는다(참고 예시의 톤을 살려서).
 
 반드시 {"message": "..."} JSON만 출력."""
@@ -113,6 +113,7 @@ def _build_intents(state: PlanState) -> list[dict]:
                     {"slot": c, "title": slot_title(c)}
                     for c in (pending_item.get("candidate_slots") or [])
                 ],
+                "confirm_kind": pending_item.get("confirm_kind", "slot"),
                 "reason": pending_item.get("reason", ""),
             }
         )

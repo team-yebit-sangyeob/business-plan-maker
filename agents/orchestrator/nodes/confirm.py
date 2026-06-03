@@ -8,8 +8,10 @@ pending_confirmations에 쌓인다. 그러면 conversation이 confirm_slot으로
 decision:
 - pick    → 사용자가 후보 중 하나를 고르거나 긍정 → 그 슬롯에 value 주입, 큐에서 제거.
 - reject  → 넣지 말라(아니/빼) → 큐에서 제거(슬롯은 빈 채).
-- unclear → 그 질문과 무관한 다른 얘기 → attempts++; 한도(2회) 넘으면 제안 슬롯으로
-            자동 확정 후 제거(무한 재질문 방지), 아니면 유지(다음 턴 재질문).
+- unclear → 그 질문과 무관한 다른 얘기 → confirm_kind로 가른다:
+            · "commit"(결정 미확정) → 드롭(결정 안 한 건 안 채운다).
+            · "slot"(값은 결정, 칸만 모름) → attempts++; 한도(2회) 넘으면 제안 슬롯으로
+              자동 확정 후 제거(무한 재질문 방지), 아니면 유지(다음 턴 재질문).
 
 pending이 비어 있으면 no-op이라 일반 턴엔 영향이 없다. 해소 후에도 파이프라인은
 계속 흐른다(같은 발화에 추가 정보가 있으면 segment 이하가 정상 처리). 방금 채운
@@ -84,7 +86,11 @@ async def confirm_resolve_node(state: PlanState) -> dict:
     if out.decision == "reject":
         return {"pending_confirmations": rest}
 
-    # unclear — 답을 안 했다. 재질문 한도를 넘으면 제안 슬롯으로 자동 확정.
+    # unclear — 그 질문과 무관한 답을 했다.
+    # commit(결정 자체가 미확정) → 자동 확정하지 않고 드롭한다(결정 안 한 건 안 채운다).
+    if item.get("confirm_kind") == "commit":
+        return {"pending_confirmations": rest}
+    # slot(값은 결정됨, 칸만 모름) → 재질문 한도를 넘으면 제안 슬롯으로 자동 확정.
     attempts = int(item.get("attempts", 0)) + 1
     if attempts >= _MAX_ATTEMPTS:
         _fill(proposed)

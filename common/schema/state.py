@@ -191,15 +191,18 @@ class Correction(TypedDict):
 
 
 class PendingConfirmation(TypedDict, total=False):
-    # 애매한 슬롯 주입을 사용자에게 확인받으려 보류한 한 건(턴을 넘어 영속).
-    # extract_slot_fills가 confidence='ambiguous'로 본 값을 슬롯 대신 여기 쌓고,
-    # conversation이 confirm_slot으로 묻고, 다음 턴 confirm_resolve가 해소한다.
+    # 슬롯 주입을 사용자에게 확인받으려 보류한 한 건(턴을 넘어 영속).
+    # extract_slot_fills가 슬롯 대신 여기 쌓고, conversation이 confirm_slot으로 묻고,
+    # 다음 턴 confirm_resolve가 해소한다. confirm_kind로 두 경우를 가른다:
+    #   "slot"  — 값은 결정됐는데 어느 슬롯인지 애매 → 미응답 2회면 proposed로 자동 확정.
+    #   "commit"— 결정 자체가 미확정(탐색) → 미응답이면 드롭(결정 안 한 건 안 채운다).
     value: str                  # 채우려던 값
     proposed_slot: str          # fill이 1순위로 고른 슬롯
-    candidate_slots: list[str]  # [proposed, *alt_slots] — 사용자에게 제시할 후보
+    candidate_slots: list[str]  # [proposed, *alt_slots] — 사용자에게 제시할 후보(commit이면 1개)
     source_text: str            # 근거가 된 세그먼트 canonical_text(질문 문구용)
     reason: str                 # 왜 애매한지(짧게)
-    attempts: int               # 재질문 횟수 — 2회 이상 미응답이면 proposed로 자동 확정
+    attempts: int               # 재질문 횟수 — slot kind는 2회 이상 미응답이면 proposed로 자동 확정
+    confirm_kind: Literal["slot", "commit"]  # 확인 종류(기본 slot, 하위호환)
 
 
 class Citation(TypedDict, total=False):
