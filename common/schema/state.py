@@ -34,9 +34,9 @@ OPTIONAL_SLOTS: tuple[str, ...] = tuple(s for s in ALL_SLOTS if s not in REQUIRE
 
 
 # --- 슬롯 정의(단일 원천) ---------------------------------------------------
-# 슬롯 선택은 segment(target_slot_hint)·fill(extract_slot_fills)·correction 세 군데서
-# 일어난다. 정의가 갈리면 같은 내용이 다른 슬롯에 박히므로, 정의·경계를 여기 한 곳에
-# 모으고 slot_guide_text()로 렌더해 세 프롬프트가 모두 같은 문구를 임베드한다.
+# 슬롯 선택은 fill(extract_slot_fills)·correction 두 군데서 일어난다(segment는 분할·복원만
+# 하고 슬롯을 고르지 않는다). 정의가 갈리면 같은 내용이 다른 슬롯에 박히므로, 정의·경계를
+# 여기 한 곳에 모으고 slot_guide_text()로 렌더해 두 프롬프트가 모두 같은 문구를 임베드한다.
 # boundary = "이건 여기 NOT 저기" — 헷갈리는 이웃 슬롯과의 경계(=fill의 애매도 판정 근거).
 class SlotSpec(TypedDict):
     title: str       # 표시 이름 — "솔루션"
@@ -168,6 +168,57 @@ def recent_history(state: PlanState, n: int = 10) -> str:
     return "\n".join(f"[{m['role']} t{m['turn']}] {m['content']}" for m in tail)
 
 
+def slot_snapshot_text(state: "PlanState") -> str:
+    """현재 슬롯 값 한 덩이(빈 칸 포함) — classify가 충돌·되묻기를 맥락에서 판단하는 재료."""
+    slots = state.get("slots") or {}
+    return "\n".join(
+        f"- {name}: {(slots.get(name) or {}).get('value') or '[비어있음]'}"
+        for name in ALL_SLOTS
+    )
+
+
+def conversation_state_text(state: "PlanState") -> str:
+    """직전 턴에 시스템이 무엇을 기다리는지 — segment·classify가 사용자 응답을 옳게 해석하는 재료.
+
+    열린 제안(open_proposal: 넣을지/어디 넣을지/바꿀지 물어둔 값)과 직전 ask_slot 슬롯을 한
+    블록으로 렌더한다. 둘 다 없으면 빈 문자열(일반 턴엔 영향 없음). '누구를 부를지(라우팅)'는
+    코드가 정하고, 이 블록은 'LLM이 무슨 발화인지'를 맥락에서 판단하게 돕는 넛지일 뿐이다.
+    """
+    lines: list[str] = []
+    op = state.get("open_proposal")
+    if op and op.get("value"):
+        value = op.get("value", "")
+        cands = [c for c in (op.get("candidate_slots") or []) if c]
+        proposed = op.get("proposed_slot") or (cands[0] if cands else None)
+        kind = op.get("confirm_kind", "slot")
+        if kind == "replace" and proposed:
+            prev = op.get("previous_value", "")
+            lines.append(
+                f'- 교체 확인 대기: "{value}"를 {proposed}({slot_title(proposed)}) 슬롯의 기존 값'
+                f'("{prev}")과 바꿀지 직전에 물었다. 이번 발화가 그 답(바꿔/아니)이면 새 주장이 아니라 확인 응답이다.'
+            )
+        elif kind == "commit" and proposed:
+            lines.append(
+                f'- 넣기 확인 대기: "{value}"를 {proposed}({slot_title(proposed)}) 슬롯에 넣을지 직전에'
+                f' 물었다. 이번 발화가 그 답(넣어/빼/고쳐서)이면 새 주장이 아니라 확인 응답이다.'
+            )
+        else:  # slot
+            cand_line = ", ".join(f"{c}({slot_title(c)})" for c in cands)
+            lines.append(
+                f'- 슬롯 선택 확인 대기: "{value}"를 어느 슬롯에 넣을지 직전에 물었다(후보: {cand_line}).'
+                f' 이번 발화가 그 답이면 새 주장이 아니라 확인 응답이다.'
+            )
+    last_asked = state.get("last_asked_slot")
+    if last_asked:
+        lines.append(
+            f"- 직전 질문 슬롯: {last_asked}({slot_title(last_asked)})를 방금 물었다."
+            f" 이번 발화가 짧은 답이면 그 슬롯에 대한 답일 수 있다."
+        )
+    if not lines:
+        return ""
+    return "[대화 상태]\n" + "\n".join(lines)
+
+
 def required_missing(state: PlanState) -> list[str]:
     """필수 슬롯 중 출력을 막는 것들. status=='filled'이 아니면 미달.
     needs_clarification(모호한 한 줄 답변)도 막는다 — 값이 들어있어도 통과 불가.
@@ -236,16 +287,18 @@ class Correction(TypedDict):
 class PendingConfirmation(TypedDict, total=False):
     # 슬롯 주입을 사용자에게 확인받으려 보류한 한 건(턴을 넘어 영속).
     # extract_slot_fills가 슬롯 대신 여기 쌓고, conversation이 confirm_slot으로 묻고,
-    # 다음 턴 confirm_resolve가 해소한다. confirm_kind로 두 경우를 가른다:
+    # 다음 턴 confirm_resolve가 해소한다. confirm_kind로 세 경우를 가른다:
     #   "slot"  — 값은 결정됐는데 어느 슬롯인지 애매 → 미응답 2회면 proposed로 자동 확정.
     #   "commit"— 결정 자체가 미확정(탐색) → 미응답이면 드롭(결정 안 한 건 안 채운다).
+    #   "replace"— 이미 찬 슬롯과 충돌하는 새 값 → 사용자가 바꾸라 해야만 덮어쓴다(미응답이면 기존 유지).
     value: str                  # 채우려던 값
     proposed_slot: str          # fill이 1순위로 고른 슬롯
-    candidate_slots: list[str]  # [proposed, *alt_slots] — 사용자에게 제시할 후보(commit이면 1개)
+    candidate_slots: list[str]  # [proposed, *alt_slots] — 사용자에게 제시할 후보(commit/replace면 1개)
     source_text: str            # 근거가 된 세그먼트 canonical_text(질문 문구용)
     reason: str                 # 왜 애매한지(짧게)
     attempts: int               # 재질문 횟수 — slot kind는 2회 이상 미응답이면 proposed로 자동 확정
-    confirm_kind: Literal["slot", "commit"]  # 확인 종류(기본 slot, 하위호환)
+    confirm_kind: Literal["slot", "commit", "replace"]  # 확인 종류(기본 slot, 하위호환)
+    previous_value: str         # replace 전용 — 덮어쓸 기존 슬롯 값(확인 문구·롤백 기록용)
 
 
 class Citation(TypedDict, total=False):
@@ -326,6 +379,8 @@ def initial_state() -> "PlanState":
         "pending_clarifications": [],
         "pending_question": "",
         "pending_confirmations": [],
+        "open_proposal": None,
+        "confirmation_consumed": False,
         "last_asked_slot": None,
         "turn_evidence": [],
         "session_evidence": [],
@@ -355,6 +410,12 @@ class PlanState(TypedDict, total=False):
     pending_question: str
     # 애매해서 주입 보류된 확인 큐 — 한 번에 하나씩 confirm_slot으로 묻는다. 턴 넘어 영속.
     pending_confirmations: list[PendingConfirmation]
+    # 턴 시작 시점의 열린 제안 스냅샷(pending_confirmations[0]) — confirm_resolve가 라이브 큐를
+    # pop해도 segment·classify가 "이번 발화가 무엇에 대한 답인가"를 보게 매 턴 run_turn이 박아준다.
+    open_proposal: PendingConfirmation | None
+    # confirm_resolve가 이번 발화를 순수 확인 응답으로 소비했는가 — True면 graph가 segment 이하를
+    # 건너뛰고 conversation 직행(열린 제안에 대한 답을 새 리서치로 재처리하지 않는다). 매 턴 리셋.
+    confirmation_consumed: bool
     # 어시스턴트가 직전에 ask_slot으로 물은 슬롯(턴 넘어 영속). fill이 "직전 질문에 직접 답"
     # (kind=decision 기준 (b))을 결정론으로 잡는 근거 — 그 슬롯에 대한 답이면 짧은 명사구라도 결정.
     last_asked_slot: str | None
