@@ -9,8 +9,12 @@ spec v0.7.5: "검증" 단계는 사라지고 logic_validator·리서치·RAG 호
   2단계 — logic_validator는 1단계 전체 완료 뒤 시작(배리어)하며, 같은 세그먼트의 1단계 RAG
           산출물(RagExtractorResult)을 입력으로 받아 claim ↔ 사내 근거의 논리적 지지 여부
           (verdict→agreement)를 판정한다.
-라우트 매트릭스상 logic_validator는 항상 rag와 동반하므로(claim), 판정에 쓸 RAG
-결과는 늘 존재한다. 만약 RAG가 근거를 못 찾으면(rag_result=None) '근거 없음'으로 흐른다.
+라우트 매트릭스상 logic_validator는 claim에서 rag와 동반하지만, 사용자가 evidence_mode로
+rag를 끄거나(research 전용) RAG가 근거를 못 찾으면 rag_result=None이 된다 — 그때는 research
+리포트만으로, 둘 다 없으면 '근거 없음'으로 판정이 흐른다(logic_validator는 None을 허용한다).
+
+evidence_mode(both/research/rag): 1단계에서 research/rag 디스패치를 거르는 사용자 토글.
+both=둘 다, research=웹만, rag=사내문서만. logic_validator는 끄지 않는다(claim이면 항상 돈다).
 """
 from __future__ import annotations
 
@@ -81,6 +85,9 @@ async def parallel_dispatch_workers_node(state: PlanState) -> dict:
 
     segments = state.get("turn_segments") or []
     slots = state.get("slots") or {}
+    # 근거 출처 범위 — 사용자가 프론트 토글로 고른다(both/research/rag). 라우트는 매트릭스가
+    # 정한 그대로 두고, 여기서 디스패치 단계에만 거른다(derive_routes는 순수 유지).
+    mode = state.get("evidence_mode", "both")
 
     # 디스패치 대상 세그먼트만 추림 (subject 비어있으면 제외).
     # '워커 라우트 유무'로 판단 — claim·question 등 워커 라우트가 있으면 매트릭스대로 디스패치.
@@ -107,13 +114,13 @@ async def parallel_dispatch_workers_node(state: PlanState) -> dict:
     fact_specs: list[tuple[int, str]] = []  # (target_idx, route)
     fact_tasks = []
     for idx, (subject, routes, label, _slot) in enumerate(targets):
-        if "research" in routes:
+        if "research" in routes and mode != "rag":
             fact_specs.append((idx, "research"))
             emit({"type": "agent_start", "cluster": "research", "subject": subject[:80]})
             fact_tasks.append(
                 _tagged(idx, "research", run_research(_verification_request(subject, label, slots, state)))
             )
-        if "rag" in routes:
+        if "rag" in routes and mode != "research":
             fact_specs.append((idx, "rag"))
             emit({"type": "agent_start", "cluster": "rag", "subject": subject[:80]})
             fact_tasks.append(_tagged(idx, "rag", run_rag_check(subject)))

@@ -159,8 +159,11 @@ def _merge_session_evidence(
     return list(merged.values())
 
 
-async def run_turn(state: PlanState, user_input: str) -> PlanState:
-    """한 턴 실행. state는 이전 턴의 누적 상태."""
+async def run_turn(
+    state: PlanState, user_input: str, evidence_mode: str = "both"
+) -> PlanState:
+    """한 턴 실행. state는 이전 턴의 누적 상태. evidence_mode는 이번 턴 dispatch의
+    근거 출처 범위(both/research/rag) — 프론트 토글 값을 매 턴 반영한다."""
     graph = build_graph()
     turn = state.get("turn", 0) + 1
     messages = list(state.get("messages") or [])
@@ -175,6 +178,7 @@ async def run_turn(state: PlanState, user_input: str) -> PlanState:
         "pending_clarifications": [],
         "turn_validation_reports": [],
         "turn_evidence": [],
+        "evidence_mode": evidence_mode,
     }
     result: PlanState = await graph.ainvoke(next_state)
 

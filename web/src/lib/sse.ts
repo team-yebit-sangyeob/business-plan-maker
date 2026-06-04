@@ -1,4 +1,4 @@
-import type { ChatEvent } from "./types";
+import type { ChatEvent, EvidenceMode } from "./types";
 
 /**
  * POST /chat → SSE 스트림 파싱.
@@ -9,11 +9,12 @@ export async function streamChat(
   text: string,
   onEvent: (e: ChatEvent) => void,
   signal?: AbortSignal,
+  evidenceMode: EvidenceMode = "both",
 ): Promise<void> {
   const res = await fetch(`/api/chat`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ session_id: sessionId, text }),
+    body: JSON.stringify({ session_id: sessionId, text, evidence_mode: evidenceMode }),
     signal,
   });
   if (!res.ok || !res.body) {

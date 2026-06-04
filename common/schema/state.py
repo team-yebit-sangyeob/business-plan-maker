@@ -328,6 +328,7 @@ def initial_state() -> "PlanState":
         "last_asked_slot": None,
         "turn_evidence": [],
         "session_evidence": [],
+        "evidence_mode": "both",
     }
 
 
@@ -356,3 +357,6 @@ class PlanState(TypedDict, total=False):
     # 어시스턴트가 직전에 ask_slot으로 물은 슬롯(턴 넘어 영속). fill이 "직전 질문에 직접 답"
     # (kind=decision 기준 (b))을 결정론으로 잡는 근거 — 그 슬롯에 대한 답이면 짧은 명사구라도 결정.
     last_asked_slot: str | None
+    # 사용자가 프론트 토글로 고른 근거 출처 범위. dispatch가 research/rag 디스패치를 이걸로
+    # 거른다(both=둘 다, research=웹만, rag=사내문서만). derive_routes는 순수 유지, logic_validator는 불변.
+    evidence_mode: Literal["research", "rag", "both"]

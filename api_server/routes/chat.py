@@ -5,7 +5,7 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
-from typing import Annotated, AsyncIterator, TypedDict
+from typing import Annotated, AsyncIterator, NotRequired, TypedDict
 
 from fastapi import APIRouter, Body, HTTPException
 from sse_starlette.sse import EventSourceResponse
@@ -24,6 +24,11 @@ logger = logging.getLogger(__name__)
 class ChatRequest(TypedDict):
     session_id: str
     text: str
+    # 근거 출처 범위 토글(both/research/rag). 구버전 클라이언트가 빼고 보내면 both로 본다.
+    evidence_mode: NotRequired[str]
+
+
+_EVIDENCE_MODES = ("research", "rag", "both")
 
 
 def _slot_update_event(slot_name: str, slot: dict) -> dict:
@@ -36,7 +41,7 @@ def _slot_update_event(slot_name: str, slot: dict) -> dict:
     }
 
 
-async def _stream(session_id: str, text: str) -> AsyncIterator[dict]:
+async def _stream(session_id: str, text: str, evidence_mode: str = "both") -> AsyncIterator[dict]:
     store = get_store()
     state = store.get(session_id)
     if state is None:
@@ -58,7 +63,7 @@ async def _stream(session_id: str, text: str) -> AsyncIterator[dict]:
         # run_turn(→dispatch) 태스크에 전파된다.
         set_emitter(queue.put_nowait)
         try:
-            result_box["state"] = await run_turn(state, text)
+            result_box["state"] = await run_turn(state, text, evidence_mode)
         except Exception as exc:  # SSE error 이벤트로 변환 + 서버 로그에 남김
             logger.warning("run_turn 실패 → SSE error 변환: %s", exc)
             result_box["error"] = exc
@@ -124,4 +129,7 @@ async def chat(req: Annotated[ChatRequest, Body()]):
     """한 턴을 실행하고 진행·응답·슬롯 변경을 SSE로 스트리밍한다(진입 시 세션 없으면 404)."""
     if get_store().get(req["session_id"]) is None:
         raise HTTPException(status_code=404, detail="session not found")
-    return EventSourceResponse(_stream(req["session_id"], req["text"]))
+    mode = req.get("evidence_mode") or "both"
+    if mode not in _EVIDENCE_MODES:
+        mode = "both"
+    return EventSourceResponse(_stream(req["session_id"], req["text"], mode))

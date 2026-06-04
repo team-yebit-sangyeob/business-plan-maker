@@ -81,7 +81,7 @@ OPTIONAL_SLOTS = tuple(s for s in ALL_SLOTS if s not in REQUIRED_SLOTS)
 
 그래프가 노드 사이로 주고받는 한 턴의 모든 것: `session_id, turn, user_input, messages[],
 turn_segments[], slots{}, correction_log[], turn_validation_reports[], turn_evidence[],
-session_evidence[], pending_clarifications[], pending_question, pending_confirmations[], last_asked_slot`.
+session_evidence[], pending_clarifications[], pending_question, pending_confirmations[], last_asked_slot, evidence_mode`.
 `initial_state()`가 빈 한 벌을 만든다 (슬롯 10개 모두 empty).
 > `pending_confirmations[]`는 **주입을 보류한 슬롯 값 큐**(`PendingConfirmation`). fill이 슬롯 애매(`confirm_kind="slot"`)
 > 거나 결정 미확정(탐색, `confirm_kind="commit"`)으로 본 값을 슬롯 대신 여기 쌓고, 다음 턴 `confirm_resolve`가 사용자 답으로 해소한다.
@@ -210,8 +210,13 @@ logic_validator → run_logic_validator(subject, rag_result, research_report)   
 > claim을 논리적으로 지지하는지 판정하므로, 1단계 RAG 산출물 `RagExtractorResult`가 먼저 있어야
 > 한다. RAG는 `(ValidationReport, RagExtractorResult)`를 돌려주고 dispatch가 그 원본을 2단계로
 > 넘긴다(프론트엔 ValidationReport만 발행 — 단 사내 원문은 `report.citations`의 `raw_source`로 전달).
-> 매트릭스상 logic_validator는 항상 rag와 동반하므로 입력 근거는 늘 존재하며, RAG가 근거를 못
-> 찾으면(`rag_result=None`) "근거 없음"으로 흐른다.
+> 매트릭스상 logic_validator는 claim에서 rag와 동반하지만, `evidence_mode`로 rag를 끄거나 RAG가
+> 근거를 못 찾으면(`rag_result=None`) research 리포트만으로, 둘 다 없으면 "근거 없음"으로 흐른다.
+>
+> **`evidence_mode` 토글(both/research/rag)** — 사용자가 프론트에서 고른 근거 출처 범위를 `run_turn`이
+> state에 싣고, 1단계에서 `research`/`rag` 디스패치를 이걸로 거른다(`both`=둘 다, `research`=웹만,
+> `rag`=사내문서만). `derive_routes`(classify)는 순수하게 두고 **디스패치 단계에서만** 거르며,
+> `logic_validator`는 토글과 무관하게 claim이면 항상 돈다(가능한 근거로 판정). 최소 한쪽은 늘 켜진다.
 >
 > **발행은 완료순, 반환은 디스패치순** — 1단계는 `asyncio.as_completed`로 먼저 끝난 워커(웹/사내문서)의
 > 결과 카드부터 발행해 사용자가 둘 다 끝나길 기다리지 않게 한다. 다만 `turn_validation_reports`·
