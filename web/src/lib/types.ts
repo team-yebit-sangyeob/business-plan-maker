@@ -44,12 +44,6 @@ export const SLOT_TITLES: Record<SlotName, string> = {
   risks: "리스크",
 };
 
-export const SOURCE_LABEL_KO: Record<SourceLabel, string> = {
-  user: "사용자 입력",
-  research: "리서치 결과",
-  empty: "[미정]",
-};
-
 export interface SessionSnapshot {
   session_id: string;
   turn: number;

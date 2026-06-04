@@ -4,7 +4,6 @@ import {
   OPTIONAL_SLOTS,
   REQUIRED_SLOTS,
   SLOT_TITLES,
-  SOURCE_LABEL_KO,
   isRequiredSlot,
 } from "../lib/types";
 
@@ -46,18 +45,10 @@ function SlotRow({
             필수
           </span>
         )}
-        {filled && slot?.source_label && (
-          <span className="ml-auto text-[10px] uppercase tracking-wider text-muted-foreground font-mono">
-            {SOURCE_LABEL_KO[slot.source_label]}
-          </span>
-        )}
       </div>
-      {/* 채워진 슬롯이 '어떤 내용으로' 채워졌는지 — 제목 아래에. 긴 값은 2줄 클램프 + hover 전체. */}
+      {/* 채워진 슬롯이 '어떤 내용으로' 채워졌는지 — 제목 아래에 전체 내용을 보여준다. */}
       {value && (
-        <p
-          className="ml-8 mt-0.5 text-xs text-muted-foreground break-words line-clamp-2"
-          title={value}
-        >
+        <p className="ml-8 mt-0.5 text-xs text-muted-foreground break-words whitespace-pre-wrap">
           {value}
         </p>
       )}
