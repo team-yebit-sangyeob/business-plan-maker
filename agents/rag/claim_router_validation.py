@@ -37,7 +37,7 @@ class ClaimExtractionResult(BaseModel):
     claim: str = Field(description="검색에 적합하게 정제된 핵심 주장 문장")
     normalized_claim: str = Field(description="검색 최적화를 위해 정규화된 claim 표현")
     topic: str = Field(description="claim의 핵심 주제어 (짧게)")
-    keywords: List[str] = Field(description="검색에 효과적인 한국어 핵심 키워드 3개")
+    keywords: List[str] = Field(description="검색에 효과적인 한국어 핵심 키워드 2개")
     search_ready: bool = Field(
         description="사실 기반으로 검증 가능한 claim이면 True, 의견·질문·명령이면 False"
     )
@@ -74,7 +74,7 @@ _CLAIM_EXTRACTOR_SYSTEM = """너는 팩트체크 및 리서치를 위한 claim �
   "claim": "정제된 핵심 주장 문장",
   "normalized_claim": "정규화된 표현",
   "topic": "핵심 주제어",
-  "keywords": ["키워드1", "키워드2", "키워드3"],
+  "keywords": ["키워드1", "키워드2"],
   "search_ready": true
 }"""
 

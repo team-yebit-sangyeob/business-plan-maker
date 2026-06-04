@@ -45,10 +45,10 @@ DIRECTORY_MAP_PATH: Path = Path(
 )
 
 # SearchHighlightAgent의 최대 도구 호출 횟수 (fallback 기준)
-MAX_AGENT_TURNS: int = int(os.getenv("MAX_AGENT_TURNS", "12"))
+MAX_AGENT_TURNS: int = int(os.getenv("MAX_AGENT_TURNS", "5"))
 
 # 검색 결과에서 제외할 최소 청크 길이 (자)
-MIN_CHUNK_LEN: int = int(os.getenv("MIN_CHUNK_LEN", "50"))
+MIN_CHUNK_LEN: int = int(os.getenv("MIN_CHUNK_LEN", "100"))
 
 # LLM 관련성 필터 활성화 여부 (환경변수로 비활성화 가능)
 ENABLE_LLM_RELEVANCE_FILTER: bool = os.getenv("ENABLE_LLM_RELEVANCE_FILTER", "true").lower() == "true"
@@ -267,6 +267,7 @@ SEARCH_HIGHLIGHT_TOOLS = [
         "description": (
             "지정 폴더의 Chroma DB에서 keyword로 청크를 검색한다. "
             f"{MIN_CHUNK_LEN}자 미만 청크는 자동 제외되며, LLM 관련성 필터도 적용된다. "
+            "LLM 관련성 필터를 통과했더라도 차례, 목차, 각주에 대한 청크는 제외된다."
             "valid_count=0이거나 결과가 부족하면 다른 keyword나 folder로 재호출한다."
         ),
         "parameters": {
