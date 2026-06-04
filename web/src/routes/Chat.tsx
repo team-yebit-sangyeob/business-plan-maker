@@ -226,6 +226,7 @@ export default function Chat() {
                 {EVIDENCE_MODE_HINT[evidenceMode]}
               </p>
             </div>
+            <div className="self-stretch w-px bg-border" aria-hidden="true" />
             {!allRequiredFilled && (
               <span
                 className="text-xs text-muted-foreground font-mono"
