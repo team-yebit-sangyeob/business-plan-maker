@@ -13,8 +13,14 @@ import type {
   PlanCard,
   SessionSnapshot,
   ChatEvent,
+  EvidenceMode,
 } from "../lib/types";
-import { REQUIRED_SLOTS } from "../lib/types";
+import {
+  REQUIRED_SLOTS,
+  EVIDENCE_MODE_ORDER,
+  EVIDENCE_MODE_LABEL,
+  EVIDENCE_MODE_HINT,
+} from "../lib/types";
 
 function makeId() {
   return Math.random().toString(36).slice(2, 10);
@@ -25,6 +31,7 @@ export default function Chat() {
   const [messages, setMessages] = useState<Message[]>([]);
   const [streaming, setStreaming] = useState(false);
   const [building, setBuilding] = useState(false);
+  const [evidenceMode, setEvidenceMode] = useState<EvidenceMode>("both");
   const [latestPdfId, setLatestPdfId] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
   const currentAgentId = useRef<string | null>(null);
@@ -123,7 +130,7 @@ export default function Chat() {
       };
 
       try {
-        await streamChat(session.session_id, text, onEvent);
+        await streamChat(session.session_id, text, onEvent, undefined, evidenceMode);
       } catch (e) {
         setError(String(e));
         // 스트림 실패 시 비어 있는 에이전트 말풍선 제거(빈 박스 잔류 방지)
@@ -145,7 +152,7 @@ export default function Chat() {
         refreshSession();
       }
     },
-    [session, refreshSession],
+    [session, refreshSession, evidenceMode],
   );
 
   const allRequiredFilled =
@@ -187,6 +194,39 @@ export default function Chat() {
             </div>
           </div>
           <div className="flex items-center gap-3">
+            <div className="flex flex-col items-start gap-1">
+              <div className="flex items-center gap-2">
+                <span className="text-[10px] uppercase tracking-wider text-muted-foreground font-mono">
+                  근거 출처
+                </span>
+                <div
+                  className="flex items-center rounded-md border border-border overflow-hidden text-xs font-medium"
+                  role="group"
+                  aria-label="근거 출처 범위"
+                >
+                  {EVIDENCE_MODE_ORDER.map((mode) => (
+                    <button
+                      key={mode}
+                      type="button"
+                      onClick={() => setEvidenceMode(mode)}
+                      aria-pressed={evidenceMode === mode}
+                      title={EVIDENCE_MODE_HINT[mode]}
+                      className={`px-3 py-1.5 transition-colors ${
+                        evidenceMode === mode
+                          ? "bg-primary text-primary-foreground"
+                          : "text-muted-foreground hover:bg-muted"
+                      }`}
+                    >
+                      {EVIDENCE_MODE_LABEL[mode]}
+                    </button>
+                  ))}
+                </div>
+              </div>
+              <p className="text-[11px] text-muted-foreground max-w-[20rem] leading-snug">
+                {EVIDENCE_MODE_HINT[evidenceMode]}
+              </p>
+            </div>
+            <div className="self-stretch w-px bg-border" aria-hidden="true" />
             {!allRequiredFilled && (
               <span
                 className="text-xs text-muted-foreground font-mono"

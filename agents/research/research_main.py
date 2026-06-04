@@ -2,7 +2,7 @@
 
 흐름: VerificationRequest → 분해기 → 검색·평가·재작성 루프 → 리포터 → ValidationReport.
 
-dispatch가 research·rag를 asyncio.gather로 병렬 호출하므로, 동기인 OpenAI/Tavily
+dispatch가 research·rag를 asyncio.as_completed로 병렬 호출하므로, 동기인 OpenAI/Tavily
 호출은 asyncio.to_thread로 감싸 이벤트 루프를 막지 않는다(병렬성 보존).
 파이프라인이 실패하면 stub 응답으로 폴백 — 그래프는 안 죽는다(복원력). 키가 없으면 상위
 (call_json·서버 기동)에서 실행 자체가 막히므로 여기엔 키리스/mock 분기가 없다.

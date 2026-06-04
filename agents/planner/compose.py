@@ -27,7 +27,6 @@ async def compose_markdown(state: PlanState) -> str:
     """PlanState → 사업 계획서 마크다운. 출력 게이트(Type 0 거절)는 호출자(plan 라우트)가 본다."""
     slots = state.get("slots") or {}
     records = state.get("session_evidence") or []
-    output_request = state.get("output_request")
     correction_log = state.get("correction_log") or []
 
     foot = build_footnotes(records)
@@ -48,6 +47,6 @@ async def compose_markdown(state: PlanState) -> str:
         summary=summary,
         foot=foot,
         correction_log=correction_log,
-        output_request=output_request,
+        early=bool(missing),
         generated_at=datetime.now().strftime("%Y-%m-%d %H:%M"),
     )

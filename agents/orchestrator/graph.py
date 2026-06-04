@@ -3,10 +3,13 @@
   confirm_resolve → segment → classify
   (보류된 슬롯 확인 해소)
           → correction              (correction 라벨 세그먼트 처리)
-          → _clarify_branch         (clarify 라우트만 있고 워커 라우트 없으면 dispatch 우회)
+          → _clarify_branch         (clarify 라우트만 있고 워커 라우트 없으면 dispatch·fills 우회)
             ├ dispatch+fills 경로   (워커 라우트 발견 → 리서치/RAG/논리검증 호출)
-            └ skip 경로             (명확화 우선)
-          → gate → conversation → integrator → END
+            └ skip 경로             (명확화 우선 → conversation 직행)
+          → conversation → integrator → END
+
+계획서 생성은 그래프 밖이다: 채팅(이 그래프)은 슬롯을 채우고 답할 뿐, 계획서는 명시적
+버튼(POST /plan)에서만 합성한다(필수 슬롯 게이트는 그 라우트가 required_missing으로 본다).
 
 처리 순서와 분기는 별도 priority 필드 없이 세그먼트의 routes/utterance_types에서
 바로 파생한다(워커 호출은 routes, 정정 처리는 utterance_types).
@@ -19,7 +22,6 @@ end-to-end trace 예시 (turn 5, "카카오는 빼자. 예산은 1억으로 가�
   dispatch       → seg2 canonical: 1단계 research·rag 병렬 → 2단계 logic_validator(1단계 RAG 산출물 입력)
                    → turn_validation_reports 적재
   extract_fills  → 빈 슬롯에 "예산 1억" 채울 수 있으면 resources 등에 반영
-  gate           → "가자"는 출력요청 아님 → output_request=None
   conversation   → _build_intents(acknowledge·report_findings·ask_slot)를 자연어 한 응답으로 → pending_question
   integrator     → pass-through: 이번 턴 pending_clarifications만 기록(LLM 없음)
 """
@@ -40,7 +42,6 @@ from agents.orchestrator.nodes.correction import (
 )
 from agents.orchestrator.nodes.confirm import confirm_resolve_node
 from agents.orchestrator.nodes.dispatch import parallel_dispatch_workers_node
-from agents.orchestrator.nodes.gate import gate_node
 from agents.orchestrator.nodes.integrator import response_integrator_node
 from agents.orchestrator.progress import emit
 from agents.conversation.agent import conversation_node
@@ -63,7 +64,6 @@ _STAGE_LABELS: dict[str, str] = {
     "classify": "유형 분류",
     "correction": "정정 반영",
     "extract_fills": "슬롯 채우기",
-    "gate": "출력 판단",
     "conversation": "답변 작성",
 }
 
@@ -85,8 +85,8 @@ def _staged(name: str, fn):
     return wrapped
 
 
-def _clarify_branch(state: PlanState) -> Literal["dispatch", "gate"]:
-    """명확화(clarify 라우트)만 있고 부를 워커가 하나도 없으면 디스패치 우회.
+def _clarify_branch(state: PlanState) -> Literal["dispatch", "conversation"]:
+    """명확화(clarify 라우트)만 있고 부를 워커가 하나도 없으면 디스패치·슬롯채움 우회.
 
     dispatch_node와 같은 기준(워커 라우트 유무)으로 판단해 일관성 유지 —
     부를 워커가 있으면(claim·question 등) 명확화가 섞여 있어도 dispatch로 보낸다.
@@ -95,7 +95,7 @@ def _clarify_branch(state: PlanState) -> Literal["dispatch", "gate"]:
     has_clarify = any("clarify" in (s.get("routes") or []) for s in segments)
     has_dispatch = any(_WORKER_ROUTES & set(s.get("routes") or []) for s in segments)
     if has_clarify and not has_dispatch:
-        return "gate"
+        return "conversation"
     return "dispatch"
 
 
@@ -111,7 +111,6 @@ def build_graph():
     g.add_node("correction", _staged("correction", correction_node), retry_policy=_LLM_RETRY)
     g.add_node("dispatch", _staged("dispatch", parallel_dispatch_workers_node))
     g.add_node("extract_fills", _staged("extract_fills", extract_slot_fills_node), retry_policy=_LLM_RETRY)
-    g.add_node("gate", _staged("gate", gate_node), retry_policy=_LLM_RETRY)
     g.add_node("conversation", _staged("conversation", conversation_node), retry_policy=_LLM_RETRY)
     g.add_node("integrator", _staged("integrator", response_integrator_node))
 
@@ -122,11 +121,10 @@ def build_graph():
     g.add_conditional_edges(
         "correction",
         _clarify_branch,
-        {"dispatch": "dispatch", "gate": "gate"},
+        {"dispatch": "dispatch", "conversation": "conversation"},
     )
     g.add_edge("dispatch", "extract_fills")
-    g.add_edge("extract_fills", "gate")
-    g.add_edge("gate", "conversation")
+    g.add_edge("extract_fills", "conversation")
     g.add_edge("conversation", "integrator")
     g.add_edge("integrator", END)
 
@@ -161,8 +159,11 @@ def _merge_session_evidence(
     return list(merged.values())
 
 
-async def run_turn(state: PlanState, user_input: str) -> PlanState:
-    """한 턴 실행. state는 이전 턴의 누적 상태."""
+async def run_turn(
+    state: PlanState, user_input: str, evidence_mode: str = "both"
+) -> PlanState:
+    """한 턴 실행. state는 이전 턴의 누적 상태. evidence_mode는 이번 턴 dispatch의
+    근거 출처 범위(both/research/rag) — 프론트 토글 값을 매 턴 반영한다."""
     graph = build_graph()
     turn = state.get("turn", 0) + 1
     messages = list(state.get("messages") or [])
@@ -174,10 +175,10 @@ async def run_turn(state: PlanState, user_input: str) -> PlanState:
         "turn": turn,
         "messages": messages,
         "turn_segments": [],
-        "output_request": None,
         "pending_clarifications": [],
         "turn_validation_reports": [],
         "turn_evidence": [],
+        "evidence_mode": evidence_mode,
     }
     result: PlanState = await graph.ainvoke(next_state)
 

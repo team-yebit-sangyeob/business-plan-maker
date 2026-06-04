@@ -80,11 +80,11 @@ def render(
     summary: str,
     foot: Footnotes,
     correction_log: list[Correction],
-    output_request: str | None,
+    early: bool,
     generated_at: str,
 ) -> str:
-    """전체 계획서 마크다운(결정론). type2면 버전에 '(조기 출력)' 표기."""
-    version = "v1 (조기 출력)" if output_request == "type2" else "v1"
+    """전체 계획서 마크다운(결정론). 선택 슬롯이 비어 조기 출력이면 버전에 '(조기 출력)' 표기."""
+    version = "v1 (조기 출력)" if early else "v1"
 
     out: list[str] = [
         "# 사업 계획서",

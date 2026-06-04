@@ -25,8 +25,9 @@ ALL_SLOTS: tuple[str, ...] = (
     "risks",       # 리스크: "내부 감수팀 보유 시 니즈 약함"
 )
 
-# 출력 게이트 필수 3 — '셋 다 차야 출력'이라는 멤버십(기획서 3장). 질문 순서와 무관하다:
-# goal은 질문은 늦게(7번째) 받지만 출력 전엔 반드시 차 있어야 한다(gate가 강제).
+# 출력 필수 3 — '셋 다 차야 출력'이라는 멤버십(기획서 3장). 질문 순서와 무관하다:
+# goal은 질문은 늦게(7번째) 받지만 출력 전엔 반드시 차 있어야 한다(plan 라우트의
+# required_missing 검사 + 프론트 '계획서 생성' 버튼 비활성으로 강제).
 REQUIRED_SLOTS: tuple[str, ...] = ("problem", "target", "goal")
 # 선택 = 나머지. 자연 질문 순서를 유지하려고 ALL_SLOTS에서 거른다(비어도 [미정]로 출력 가능).
 OPTIONAL_SLOTS: tuple[str, ...] = tuple(s for s in ALL_SLOTS if s not in REQUIRED_SLOTS)
@@ -167,6 +168,20 @@ def recent_history(state: PlanState, n: int = 10) -> str:
     return "\n".join(f"[{m['role']} t{m['turn']}] {m['content']}" for m in tail)
 
 
+def required_missing(state: PlanState) -> list[str]:
+    """필수 슬롯 중 출력을 막는 것들. status=='filled'이 아니면 미달.
+    needs_clarification(모호한 한 줄 답변)도 막는다 — 값이 들어있어도 통과 불가.
+    계획서 생성(plan 라우트)이 출력 직전 이 결과로 거절(Type 0)을 판정한다."""
+    slots = state.get("slots") or {}
+    return [s for s in REQUIRED_SLOTS if (slots.get(s) or {}).get("status") != "filled"]
+
+
+def optional_missing(state: PlanState) -> list[str]:
+    """선택 슬롯 중 값이 빈 것들. 예: ["market","revenue"]. 계획서의 '조기 출력' 표기에 쓰인다."""
+    slots = state.get("slots") or {}
+    return [s for s in OPTIONAL_SLOTS if not (slots.get(s) or {}).get("value")]
+
+
 # 발화 유형 — content는 매트릭스로 워커 라우트를 파생하고, interaction(meta·recall)은
 # 디스패치 없이 conversation이 직접 받는다(derive_routes가 ["none"]). 다중 라벨 가능.
 UtteranceType = Literal[
@@ -176,7 +191,7 @@ UtteranceType = Literal[
     "correction",            # 정정·취소 → 슬롯 덮어쓰기(correction_node). 예: "아 카카오는 빼자"
     "question",              # 새 정보 요청 → 리서치(외부)·RAG(내부). 예: "웹툰 시장 규모가 어떻게 돼?"
     # interaction — 디스패치 없음, conversation이 처리
-    "meta",                  # 단순응답·진행 신호. 예: "응 다음", "여기까지 뽑아줘"
+    "meta",                  # 단순응답·진행 신호. 예: "응 다음", "그래 그거"
     "recall",                # 되묻기 — 직전 대화를 다시 묻거나 확인 → conversation이 대화 이력에서 답. 예: "아까 일본 된다며?"
     "tool_help",             # 도구/슬롯/사용법 메타질문 → conversation이 SLOT_SPECS·APP_OVERVIEW에서 답(워커 없음). 예: "솔루션 슬롯이 뭐야?", "넌 뭐 할 수 있어?"
 ]
@@ -309,11 +324,11 @@ def initial_state() -> "PlanState":
         "turn_validation_reports": [],
         "pending_clarifications": [],
         "pending_question": "",
-        "output_request": None,
         "pending_confirmations": [],
         "last_asked_slot": None,
         "turn_evidence": [],
         "session_evidence": [],
+        "evidence_mode": "both",
     }
 
 
@@ -337,10 +352,11 @@ class PlanState(TypedDict, total=False):
 
     pending_clarifications: list[str]
     pending_question: str
-    # 출력 요청 분기 결과 (8장 Type 0/1/2)
-    output_request: Literal["type0", "type1", "type2"] | None
     # 애매해서 주입 보류된 확인 큐 — 한 번에 하나씩 confirm_slot으로 묻는다. 턴 넘어 영속.
     pending_confirmations: list[PendingConfirmation]
     # 어시스턴트가 직전에 ask_slot으로 물은 슬롯(턴 넘어 영속). fill이 "직전 질문에 직접 답"
     # (kind=decision 기준 (b))을 결정론으로 잡는 근거 — 그 슬롯에 대한 답이면 짧은 명사구라도 결정.
     last_asked_slot: str | None
+    # 사용자가 프론트 토글로 고른 근거 출처 범위. dispatch가 research/rag 디스패치를 이걸로
+    # 거른다(both=둘 다, research=웹만, rag=사내문서만). derive_routes는 순수 유지, logic_validator는 불변.
+    evidence_mode: Literal["research", "rag", "both"]

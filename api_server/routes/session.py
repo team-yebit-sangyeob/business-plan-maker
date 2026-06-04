@@ -22,7 +22,6 @@ def _serialize_state(state) -> dict:
         "turn": state.get("turn", 0),
         "slots": slots,
         "pending_question": state.get("pending_question", ""),
-        "output_request": state.get("output_request"),
         "correction_count": len(state.get("correction_log") or []),
     }
 

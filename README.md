@@ -140,7 +140,7 @@ langgraph dev                        # 프로젝트 루트에서
 `https://smith.langchain.com/studio/?baseUrl=http://127.0.0.1:2024`
 
 Studio에서 `orchestrator` 그래프를 선택하면 토폴로지
-(`confirm_resolve → segment → classify → correction →[조건분기]→ dispatch/gate → … → END`)가 보이고,
+(`confirm_resolve → segment → classify → correction →[조건분기]→ dispatch → … → conversation → END`)가 보이고,
 노드를 클릭해 입·출력 state를 단계별로 확인할 수 있다. 새 스레드에 아래 입력을 넣어 한 턴을 실행한다:
 
 ```json

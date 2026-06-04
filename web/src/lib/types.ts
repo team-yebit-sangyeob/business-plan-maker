@@ -55,12 +55,27 @@ export interface SessionSnapshot {
   turn: number;
   slots: Record<string, Slot>;
   pending_question: string;
-  output_request: string | null;
   correction_count?: number;
 }
 
 // 워커 클러스터 — 어느 에이전트가 냈는지 (백엔드 ValidationReport.cluster와 일치).
 export type ClusterName = "research" | "rag" | "logic_validator";
+
+// 근거 출처 범위 토글(백엔드 PlanState.evidence_mode와 일치). dispatch가 research/rag 호출을 거른다.
+export type EvidenceMode = "research" | "rag" | "both";
+
+// 토글 표시 순서·라벨·설명(헤더 세그먼트 컨트롤용 UI 카피).
+export const EVIDENCE_MODE_ORDER: EvidenceMode[] = ["both", "research", "rag"];
+export const EVIDENCE_MODE_LABEL: Record<EvidenceMode, string> = {
+  both: "둘 다",
+  research: "웹 리서치",
+  rag: "회사 문서",
+};
+export const EVIDENCE_MODE_HINT: Record<EvidenceMode, string> = {
+  both: "내가 한 말을 웹 리서치와 회사 문서 양쪽에서 검증해요.",
+  research: "외부 웹 리서치로만 검증해요 (회사 문서는 건너뜀).",
+  rag: "회사 내부 문서로만 검증해요 (웹 리서치는 건너뜀).",
+};
 
 // score 해석 단위 (백엔드 Citation.score_kind와 일치). none이면 점수 칩 생략.
 export type ScoreKind = "relevance" | "similarity_pct" | "none";
@@ -102,7 +117,7 @@ export type ChatEvent =
       source_label: SourceLabel;
       status: Slot["status"];
     }
-  | { type: "done"; next_question: string; output_request: string | null };
+  | { type: "done"; next_question: string };
 
 // 채팅창에 보여줄 에이전트 활동 한 줄 — 실행 중(running)으로 떴다가 결과(done)로 해소.
 export interface AgentActivity {

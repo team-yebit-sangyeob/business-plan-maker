@@ -18,7 +18,7 @@ OPENAI_MODEL은 research_model()과 rag 양쪽에서 읽힌다(같은 기본값)
 
 [추론 강도 노브]
 오케 기본 모델(gpt-5.4-mini)은 추론 모델이라 reasoning_effort 미설정이면 서버 기본(=medium)
-추론으로 돌아 한 턴(segment·classify·gate·conversation 등 순차 호출)이 느려진다. 그래서
+추론으로 돌아 한 턴(segment·classify·correction·conversation 등 순차 호출)이 느려진다. 그래서
 BPM_LLM_REASONING(기본 low)으로 추론 강도를 낮춰 지연을 줄인다 — call_json이 추론 모델일 때만
 ChatOpenAI에 reasoning_effort로 넘긴다.
 
