@@ -296,16 +296,8 @@ def test_multiturn_interaction_never_calls_workers(monkeypatch):
     assert calls == {}
 
 
-def test_multiturn_confirmation_answer_skips_pipeline(monkeypatch):
-    # 열린 제안에 "응"으로 답하면 confirm_resolve가 소비 → segment/classify/dispatch 통째 우회.
-    calls: dict = {}
-    _install_worker_spies(monkeypatch, calls)
-    script = _Script()
-    _install_node_stubs(monkeypatch, script)
-    script.confirm = ConfirmOut(decision="accept", slot=None, has_additional_content=False)
-
-    state = initial_state()
-    state["pending_confirmations"] = [{
+def _pending_solution_commit():
+    return [{
         "value": "AI 자동 검수 도구",
         "proposed_slot": "solution",
         "candidate_slots": ["solution"],
@@ -317,12 +309,52 @@ def test_multiturn_confirmation_answer_skips_pipeline(monkeypatch):
         "adequate": True,
     }]
 
-    state = asyncio.run(run_turn(state, "응 그걸로"))
 
-    assert calls == {}  # 확인답은 새 리서치 주문이 아니다 — 워커 0
+@pytest.mark.parametrize("user_input, confirm", [
+    ("응 그걸로", ConfirmOut(decision="accept", slot=None, has_additional_content=False)),
+    ("아니 빼", ConfirmOut(decision="reject", slot=None, has_additional_content=False)),
+    ("솔루션에 넣어", ConfirmOut(decision="pick", slot="solution", has_additional_content=False)),
+])
+def test_multiturn_pure_confirmation_skips_pipeline(monkeypatch, user_input, confirm):
+    # 열린 제안에 순수 확인답(accept/reject/pick)이면 confirm_resolve가 소비 →
+    # segment/classify/dispatch 통째 우회. 어느 태도든 새 리서치 주문이 아니다.
+    calls: dict = {}
+    _install_worker_spies(monkeypatch, calls)
+    script = _Script()
+    _install_node_stubs(monkeypatch, script)
+    script.confirm = confirm
+
+    state = initial_state()
+    state["pending_confirmations"] = _pending_solution_commit()
+
+    asyncio.run(run_turn(state, user_input))
+
+    assert calls == {}, f"'{user_input}'에 워커 호출됨: {calls}"
     # 순수 확인답 소비 → segment/classify까지 안 갔다(SegmentOut·ClassifyOut 요청 없음).
     assert "SegmentOut" not in script.schemas_seen
     assert "ClassifyOut" not in script.schemas_seen
+
+
+def test_multiturn_confirmation_with_extra_content_continues(monkeypatch):
+    # 양성 대조 — 확인답에 새 내용이 섞이면("응 넣고 + 타겟은 20대야") 우회하지 않고
+    # 파이프라인이 흘러 그 새 주장(claim)에 대해 워커를 부른다(과도한 우회 방지).
+    calls: dict = {}
+    _install_worker_spies(monkeypatch, calls)
+    script = _Script()
+    _install_node_stubs(monkeypatch, script)
+    # confirm은 추가내용 있음 → consumed=False → segment 이하로 흐른다.
+    script.confirm = ConfirmOut(decision="accept", slot=None, has_additional_content=True)
+    # 흘러간 파이프라인이 만나는 새 세그먼트는 검증 가능한 claim.
+    script.text, script.types, script.in_scope = "타겟은 20대 직장인이다", ["claim"], True
+
+    state = initial_state()
+    state["pending_confirmations"] = _pending_solution_commit()
+
+    asyncio.run(run_turn(state, "응 넣고 타겟은 20대 직장인이야"))
+
+    assert calls.get("research"), "확인답+새 내용인데 새 claim에 워커가 안 불렸다"
+    assert "SegmentOut" in script.schemas_seen  # 우회하지 않고 파이프라인을 탔다
+    assert "ClassifyOut" in script.schemas_seen
 
 
 def test_multiturn_harness_detects_dispatch_for_claim(monkeypatch):
