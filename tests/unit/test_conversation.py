@@ -86,6 +86,79 @@ def test_conversation_guard_replaces_degenerate_with_findings(monkeypatch):
     assert "1.8조" in out["pending_question"]
 
 
+def test_conversation_reason_fallback_renders_context(monkeypatch):
+    # reason_over_context도 퇴화 출력이 새면 누적 근거(context)로 결정론 대체된다.
+    async def fake_call_json(system, user, schema, *, reasoning_effort=None):
+        return ConversationOut(message="ACK")  # 회귀 증상 그대로
+
+    monkeypatch.setattr("agents.conversation.agent.call_json", fake_call_json)
+    state = initial_state()
+    state["turn"] = 1
+    state["turn_segments"] = [{
+        "text": "여기서 문제점 추론해봐",
+        "canonical_text": "여기서 문제점 추론해봐",
+        "utterance_types": ["reason"],
+        "in_scope": True,
+        "target_slot": None,
+        "routes": ["none"],
+    }]
+    state["session_evidence"] = [{
+        "subject": "국내 커피 시장 수익성",
+        "cluster": "research",
+        "findings": ["점포 포화로 가맹점 매출 감소"],
+        "agreement": "confirms",
+        "citations": [],
+        "target_slot": None,
+        "turn": 1,
+    }]
+    out = asyncio.run(conversation_node(state))
+
+    assert out["pending_question"] != "ACK"
+    assert "가맹점 매출 감소" in out["pending_question"]
+
+
+def test_reason_request_proposes_not_asks(monkeypatch):
+    # "네가 생각하는 문제는 뭐야?"처럼 어시스턴트에게 제안을 청하면(=reason),
+    # 모은 근거로 제안하는 reason_over_context가 떠야 하고 ask_slot으로 되묻지 않는다.
+    captured: dict = {}
+
+    async def fake_call_json(system, user, schema, *, reasoning_effort=None):
+        captured["payload"] = user
+        return ConversationOut(
+            message="모은 내용을 보면 저가 커피 포화로 신규 점포 수익성이 떨어지는 게 문제 같아 — 이렇게 잡아볼까?"
+        )
+
+    monkeypatch.setattr("agents.conversation.agent.call_json", fake_call_json)
+    state = initial_state()
+    state["turn"] = 1
+    state["turn_segments"] = [{
+        "text": "네가 생각하는 문제는 뭐야?",
+        "canonical_text": "네가 생각하는 문제는 뭐야?",
+        "utterance_types": ["reason"],
+        "in_scope": True,
+        "target_slot": None,
+        "routes": ["none"],
+    }]
+    state["session_evidence"] = [{
+        "subject": "국내 커피 시장 수익성",
+        "cluster": "research",
+        "findings": ["점포 포화로 가맹점 매출 감소"],
+        "agreement": "confirms",
+        "citations": [],
+        "target_slot": None,
+        "turn": 1,
+    }]
+    out = asyncio.run(conversation_node(state))
+
+    # reason 발화는 누적 근거를 실은 reason_over_context로 처리되고, 그 근거가 LLM payload에 닿는다.
+    assert "가맹점 매출 감소" in captured["payload"]
+    assert "reason_over_context" in captured["payload"]
+    # 되묻기(ask_slot) 차단 — last_asked_slot 키를 내보내지 않는다(슬롯 질문을 안 했으므로).
+    assert "last_asked_slot" not in out
+    # LLM이 돌려준 제안 문구가 그대로 사용자에게 간다(퇴화 대체 안 탐).
+    assert out["pending_question"].endswith("이렇게 잡아볼까?")
+
+
 def test_conversation_guard_passes_normal_short_reply(monkeypatch):
     async def fake_call_json(system, user, schema, *, reasoning_effort=None):
         return ConversationOut(message="좋아, 그렇게 둘게.")

@@ -85,6 +85,14 @@ def _staged(name: str, fn):
     return wrapped
 
 
+def _post_confirm_branch(state: PlanState) -> Literal["segment", "conversation"]:
+    """confirm_resolve가 발화를 순수 확인 답으로 소비했으면(accept/pick/reject + 추가내용 없음)
+    파이프라인을 건너뛰고 conversation 직행 — 열린 제안에 대한 답은 새 리서치 주문이 아니라
+    이미 confirm_resolve가 슬롯에 반영했다. revise·unrelated·추가내용 섞인 답은 segment로 흘려
+    정상 처리한다(상태 주입을 받은 classify가 잔여 확인절을 meta로 떨궈 재디스패치를 막는다)."""
+    return "conversation" if state.get("confirmation_consumed") else "segment"
+
+
 def _clarify_branch(state: PlanState) -> Literal["dispatch", "conversation"]:
     """명확화(clarify 라우트)만 있고 부를 워커가 하나도 없으면 디스패치·슬롯채움 우회.
 
@@ -115,7 +123,12 @@ def build_graph():
     g.add_node("integrator", _staged("integrator", response_integrator_node))
 
     g.add_edge(START, "confirm_resolve")
-    g.add_edge("confirm_resolve", "segment")
+    # 순수 확인 답이면 segment 이하 우회(conversation 직행), 아니면 평소대로 segment.
+    g.add_conditional_edges(
+        "confirm_resolve",
+        _post_confirm_branch,
+        {"segment": "segment", "conversation": "conversation"},
+    )
     g.add_edge("segment", "classify")
     g.add_edge("classify", "correction")
     g.add_conditional_edges(
@@ -169,6 +182,11 @@ async def run_turn(
     messages = list(state.get("messages") or [])
     messages.append(Message(role="user", content=user_input, turn=turn))
 
+    # 턴 시작 시점의 열린 제안 스냅샷 — confirm_resolve가 라이브 큐를 pop해도 segment·classify가
+    # "이번 발화가 무엇에 대한 답인가"를 보게 박아둔다(confirmation_consumed는 매 턴 False로 리셋).
+    pending = state.get("pending_confirmations") or []
+    open_proposal = pending[0] if pending else None
+
     next_state = {
         **state,
         "user_input": user_input,
@@ -179,6 +197,8 @@ async def run_turn(
         "turn_validation_reports": [],
         "turn_evidence": [],
         "evidence_mode": evidence_mode,
+        "open_proposal": open_proposal,
+        "confirmation_consumed": False,
     }
     result: PlanState = await graph.ainvoke(next_state)
 

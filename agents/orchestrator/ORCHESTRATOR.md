@@ -46,21 +46,26 @@ OPTIONAL_SLOTS = tuple(s for s in ALL_SLOTS if s not in REQUIRED_SLOTS)
 > **필수 ≠ 먼저 질문.** `goal`은 필수(게이트 조건)지만 질문은 7번째 — 솔루션·수익모델을 모르면 측정 가능한 목표가 안 나오므로 일부러 늦췄다. "필수냐"(게이트 멤버십)와 "몇 번째로 묻느냐"(질문 순서)를 분리.
 > `advantage`(차별점·경쟁우위)는 기획서 9슬롯 외에 도메인 보강으로 추가한 슬롯 — "왜 우리인가".
 
-**슬롯 정의의 단일 원천 = `SLOT_SPECS`** (`state.py`). 각 슬롯에 `{title, definition, boundary, question}`을 두고, `slot_guide_text()`가 이를 `"- solution (솔루션): <정의> | 경계: <경계규칙>"` 한 블록으로 렌더한다. **segment·extract_slot_fills·correction 프롬프트가 모두 이 한 함수를 임베드**해 같은 정의·경계를 공유한다(예전엔 정의가 네 곳에 흩어져 같은 내용이 호출마다 다른 슬롯에 들어가곤 했다). `boundary`("이건 여기 NOT 저기")는 헷갈리는 이웃 슬롯 경계를 못박은 것 — `solution↔revenue`(무엇을 만드나 vs 어떻게 버나), `goal↔revenue`(목표 수치 vs 과금 방식), `market↔advantage`(경쟁사 데이터 vs 우리 우위) 등 8쌍. 이 경계는 동시에 fill이 "한 슬롯에 깔끔히 안 떨어지면 `ambiguous`로 보류"하는 판정 근거가 된다(§3.4). 도구·슬롯 메타질문(`tool_help`)의 응답도 같은 `SLOT_SPECS`에서 렌더한다 — `tool_help_text()`가 `APP_OVERVIEW`+슬롯 정의(제목·정의·경계) 전부를 한 덩이 '참고 자료'(body)로 묶고, conversation은 사용자 질문(subject)과 그 body만 받는다. **어느 슬롯을 얼마나 답할지(특정 1개/여럿/전체/개요)는 코드가 키워드로 가르지 않고 LLM이 질문에 맞춰 정한다** — 라우팅(워커 호출)이 아니라 표현 결정이라 LLM 몫이다. 슬롯 설명이 또 갈리지 않게 단일 원천을 공유한다.
+**슬롯 정의의 단일 원천 = `SLOT_SPECS`** (`state.py`). 각 슬롯에 `{title, definition, boundary, question}`을 두고, `slot_guide_text()`가 이를 `"- solution (솔루션): <정의> | 경계: <경계규칙>"` 한 블록으로 렌더한다. **extract_slot_fills·correction 프롬프트가 이 한 함수를 임베드**해 같은 정의·경계를 공유한다 — 슬롯 선택의 두 권위가 같은 문구를 본다(segment은 더는 슬롯을 고르지 않아 임베드하지 않는다, §3.1). `boundary`("이건 여기 NOT 저기")는 헷갈리는 이웃 슬롯 경계를 못박은 것 — `solution↔revenue`(무엇을 만드나 vs 어떻게 버나), `goal↔revenue`(목표 수치 vs 과금 방식), `market↔advantage`(경쟁사 데이터 vs 우리 우위) 등 8쌍. 이 경계는 동시에 fill이 "한 슬롯에 깔끔히 안 떨어지면 `ambiguous`로 보류"하는 판정 근거가 된다(§3.4). 도구·슬롯 메타질문(`tool_help`)의 응답도 같은 `SLOT_SPECS`에서 렌더한다 — `tool_help_text()`가 `APP_OVERVIEW`+슬롯 정의(제목·정의·경계) 전부를 한 덩이 '참고 자료'(body)로 묶고, conversation은 사용자 질문(subject)과 그 body만 받는다. **어느 슬롯을 얼마나 답할지(특정 1개/여럿/전체/개요)는 코드가 키워드로 가르지 않고 LLM이 질문에 맞춰 정한다** — 라우팅(워커 호출)이 아니라 표현 결정이라 LLM 몫이다. 슬롯 설명이 또 갈리지 않게 단일 원천을 공유한다.
 
 각 `Slot` = `{value, source_label, status}`.
 - `source_label` ∈ `SourceLabel` (`common/schema/labels.py`): `user / research / empty` (3종)
   → **출처 라벨은 기획서 3.3 그대로 유지** (에이전트 이름은 logic_validator로 바뀌었지만 라벨 enum은 불변).
 - `status` ∈ `empty / needs_clarification / filled`.
 
-### 발화 유형 7종 (`UtteranceType`) — content / interaction 2-tier
+### 발화 유형 8종 (`UtteranceType`) — content / interaction 2-tier
 
 **content** (매트릭스로 워커 라우트 파생): `clarification_needed · claim · correction · question`
-**interaction** (디스패치 없음 → conversation이 직접 처리, `routes=["none"]`): `meta · recall · tool_help`
-> classify가 세그먼트를 **먼저 interaction인지 content인지** 가른다 — 되묻기·진행신호처럼 말의 행위가 핵심인 발화가, 안에 낀 검증가능한 명제 때문에 claim으로 끌려가 워커가 발동하던 문제를 막는다.
+**interaction** (디스패치 없음 → conversation이 직접 처리, `routes=["none"]`): `meta · recall · tool_help · reason`
+> classify가 세그먼트를 **먼저 interaction인지 content인지** 가른다 — 되묻기·진행신호처럼 말의 행위가 핵심인 발화가, 안에 낀 검증가능한 명제 때문에 claim으로 끌려가 워커가 발동하던 문제를 막는다. interaction은 "새 사실을 검색·검증할 게 없는, 대화 자체로 받는 발화"고, content는 "검증·명확화·정정·정보탐색이 필요한 발화"다.
 > `claim`은 사실·가설·결정·제약·**근거 있는 가치판단**을 한 유형으로 묶는다 — 라우팅이 동일(research+rag+logic_validator)하기 때문(구 `opinion` 흡수: 라우팅 차이가 research 발동뿐이라 분리 가치 없음). 주장을 어떻게 분해·검증할지는 **오케가 아니라 리서치 쿼리 분해기**가 정한다.
-> `recall`(되묻기)은 [최근 대화]에 이미 나온 걸 다시 묻는 발화 — 워커 없이 conversation이 대화 이력에서 답한다.
+> `recall`(되묻기)은 [최근 대화]에 이미 나온 걸 다시 묻는 발화 — 워커 없이 conversation이 대화 이력에서 답한다. 예: "아까 일본 된다며?", "우리 타겟 뭐로 정했지?".
 > `tool_help`는 도구·슬롯·사용법 자체를 묻는 메타질문("솔루션 슬롯이 뭐야?", "각 슬롯의 역할?", "넌 뭐 할 수 있어?") — 워커 없이 conversation이 `SLOT_SPECS`·`APP_OVERVIEW`에서 `explain_tool`로 답한다(슬롯 정의 전체를 재료로 주고 답변 범위는 LLM이 질문에 맞춘다 — 코드가 스코프를 정하지 않음). classify가 interaction 라벨을 content와 섞어 줘도 코드(interaction-precedence)가 content를 떨궈 워커를 막는다. "솔루션 슬롯이 뭐야(도구 설명)"가 `question`으로 끌려가 리서치를 돌리던 문제를 막는다.
+> `reason`(추론·제안 요청)은 **이미 모은 근거·대화 내용을 재료로 결론을 내달라**는 발화 — 새 검색 없이 conversation이 `session_evidence`(턴을 넘어 누적된 research·rag·logic_validator findings)와 대화 이력에서 직접 추론해 `reason_over_context` intent로 답한다(§3.7). 두 결을 한 유형으로 묶는다:
+>   - **① 종합·도출** — "여기서 문제점 추론해봐", "방금 분석에서 도출할 게 뭐야?", "이걸로 시사점 정리해줘". 가진 근거를 엮어 정리한다.
+>   - **② 제안·결정 요청** — "네가 생각하는 문제는 뭐야?", "넌 어떻게 봐?", "추천해줘", "정해줘", "제안해봐". 어시스턴트가 직접 후보를 제안한다.
+>
+>   둘 다 '새 외부 사실을 묻는 게 아니라 가진 것으로 답하라'는 점이 같아 라우팅이 동일(워커 0)하다. 핵심은 **`question`과의 경계**다 — 대화에 없던 *새 외부 대상*의 사실을 물으면 `question`(리서치를 돌린다), 가진 맥락이나 *어시스턴트의 판단*을 청하면 `reason`. 겉보기엔 둘 다 묻는 말이어도 `"커피 시장 규모 어때?"`는 새 외부 사실이라 question이고 `"그래서 네 생각엔 우리 문제가 뭔데?"`는 어시스턴트 판단을 청하니 reason이다. 이 경계가 흐려지면, 사용자가 "네 의견을 달라"는데 엉뚱하게 웹 검색을 돌리는 회피가 생긴다 — ②를 명문화한 이유다(§3.1·§3.7에서 segment·conversation이 이 신호를 어떻게 보존·소비하는지 이어 설명).
 > 세그먼트마다 `in_scope`(계획 관련 여부)도 함께 매겨, false면 워커를 막고 부드럽게 리다이렉트.
 
 ### 라우트 (`Route`)
@@ -81,11 +86,17 @@ OPTIONAL_SLOTS = tuple(s for s in ALL_SLOTS if s not in REQUIRED_SLOTS)
 
 그래프가 노드 사이로 주고받는 한 턴의 모든 것: `session_id, turn, user_input, messages[],
 turn_segments[], slots{}, correction_log[], turn_validation_reports[], turn_evidence[],
-session_evidence[], pending_clarifications[], pending_question, pending_confirmations[], last_asked_slot, evidence_mode`.
+session_evidence[], pending_clarifications[], pending_question, pending_confirmations[],
+open_proposal, confirmation_consumed, last_asked_slot, evidence_mode`.
 `initial_state()`가 빈 한 벌을 만든다 (슬롯 10개 모두 empty).
-> `pending_confirmations[]`는 **주입을 보류한 슬롯 값 큐**(`PendingConfirmation`). fill이 슬롯 애매(`confirm_kind="slot"`)
-> 거나 결정 미확정(탐색, `confirm_kind="commit"`)으로 본 값을 슬롯 대신 여기 쌓고, 다음 턴 `confirm_resolve`가 사용자 답으로 해소한다.
+> `pending_confirmations[]`는 **주입을 보류한 슬롯 값 큐**(`PendingConfirmation`). fill이 슬롯 애매(`confirm_kind="slot"`)·
+> 결정 미확정(탐색, `confirm_kind="commit"`)·찬 슬롯과 충돌(교체, `confirm_kind="replace"`)로 본 값을 슬롯 대신 여기 쌓고,
+> 다음 턴 `confirm_resolve`가 사용자 답으로 해소한다.
 > 다른 턴 임시필드와 달리 `run_turn`이 리셋하지 않아 **턴을 넘어 영속**(세션 스토어가 통째 저장).
+> `open_proposal`·`confirmation_consumed`는 **이번 턴 전용**(`run_turn`이 매 턴 박는다): `open_proposal`은 턴 시작 시점의
+> 열린 제안 스냅샷(`pending_confirmations[0]`) — `confirm_resolve`가 라이브 큐를 pop해도 segment·classify가 "이번 발화가
+> 무엇에 대한 답인가"를 보게 한다(`conversation_state_text`로 렌더). `confirmation_consumed`는 그 발화를 순수 확인 답으로
+> 소비했는지 — True면 그래프가 segment 이하를 건너뛴다(§3.0, §2).
 > `turn_validation_reports`는 **이번 턴 dispatch 결과만**(매 턴 리셋) — 대화 에이전트의 결과 보고가
 > '방금 돌린 것'만 보도록 분리. `turn_evidence`도 이번 턴치(리셋)이되 슬롯 연결정보를 더한 `EvidenceRecord`다.
 > `run_turn`이 끝에서 `turn_evidence`를 `session_evidence`로 합친다(중복 제거 + 슬롯 백필) — `session_evidence`는
@@ -103,14 +114,16 @@ session_evidence[], pending_clarifications[], pending_question, pending_confirma
 ```
 START
  └▶ confirm_resolve 보류된 슬롯 확인 해소 (pending 있을 때만; 없으면 no-op) (LLM)
- └▶ segment        발화를 의미 단위로 분해 + 맥락 복원 (LLM)
- └▶ classify       각 세그먼트 다중 라벨 + 라우팅 결정 (LLM + 결정론 덮어쓰기)
- └▶ correction     정정 신호 처리 → 슬롯 clear/replace (LLM)
- └▶ [clarify_branch]  ← 유일한 조건부 엣지
-      ├─ dispatch  research·rag 병렬 → logic_validator 후속 (2단계, 워커 라우트 있을 때)
-      │    └▶ extract_fills   빈 슬롯에 값 추출 (LLM)
-      │         └▶ conversation
-      └─ conversation  (명확화만 있으면 dispatch·fills 우회)
+ └▶ [post_confirm_branch]  ← 조건부 엣지 ①
+      ├─ conversation  (순수 확인 답 소비 → segment 이하 우회: 열린 제안에 대한 답을 새 리서치로 재처리 안 함)
+      └─ segment       발화를 의미 단위로 분해 + 맥락 복원 (LLM)
+           └▶ classify     각 세그먼트 다중 라벨 + 라우팅 결정 (LLM + 결정론 덮어쓰기)
+           └▶ correction   정정 신호 처리 → 슬롯 clear/replace (LLM)
+           └▶ [clarify_branch]  ← 조건부 엣지 ②
+                ├─ dispatch  research·rag 병렬 → logic_validator 후속 (2단계, 워커 라우트 있을 때)
+                │    └▶ extract_fills   빈 슬롯 채움 · 교체 확인 · 근거 슬롯 태그 (LLM)
+                │         └▶ conversation
+                └─ conversation  (명확화만 있으면 dispatch·fills 우회)
  └▶ conversation   state→intent 목록(_build_intents) 후 한 응답으로 렌더 (대화 에이전트, LLM)
  └▶ integrator     pending_clarifications만 기록 (pass-through, 결정론)
  └▶ END
@@ -118,8 +131,9 @@ START
 
 - `build_graph()`는 `@lru_cache(maxsize=1)` — 한 번만 컴파일, 모든 턴이 공유.
 - **노드 재시도**: LLM 노드(`confirm_resolve`·`segment`·`classify`·`correction`·`extract_fills`·`conversation`)엔 `add_node(..., retry_policy=RetryPolicy(max_attempts=3))`로 전이 오류(429·timeout·5xx) 재시도를 단다(기본 backoff 2.0·jitter). `dispatch`는 제외 — 재시도가 리서치·RAG·논리검증 워커를 재호출해 비멱등·SSE 카드 중복을 부른다. `integrator`도 제외(LLM 없는 통과).
-- **`_clarify_branch`**: 명확화(`clarify` 라우트)만 있고 부를 워커(research/rag/logic_validator 라우트)가 하나도 없으면 `conversation`으로 직행 → dispatch·extract_fills를 우회하고 모호한 발화를 검증하지 않음 (기획서 6장 ②순위 규칙). `dispatch_node`와 같은 '워커 라우트 유무' 기준이라 부를 워커가 있으면 명확화가 섞여 있어도 dispatch로 보낸다.
-- **`run_turn(state, user_input)`**: 진입점. 턴 카운터 증가 → user 메시지 적재 → 턴 임시필드 초기화 → `graph.ainvoke` → assistant 응답을 messages에 누적.
+- **`_post_confirm_branch`** (조건부 엣지 ①, confirm_resolve 뒤): `confirm_resolve`가 이번 발화를 **순수 확인 답**(accept/pick/reject + 추가 내용 없음)으로 소비하면(`confirmation_consumed=True`) `conversation`으로 직행해 segment·classify·dispatch를 건너뛴다 — 열린 제안에 대한 답("이대로 넣어")을 새 리서치 주장으로 재처리하는 회귀를 막는다. revise·unrelated·추가 내용 섞인 답은 `segment`로 흘려 정상 처리한다(상태 주입을 받은 classify가 잔여 확인절을 `meta`로 떨궈 재디스패치를 막고, 새 내용은 평소대로 분류).
+- **`_clarify_branch`** (조건부 엣지 ②, correction 뒤): 명확화(`clarify` 라우트)만 있고 부를 워커(research/rag/logic_validator 라우트)가 하나도 없으면 `conversation`으로 직행 → dispatch·extract_fills를 우회하고 모호한 발화를 검증하지 않음 (기획서 6장 ②순위 규칙). `dispatch_node`와 같은 '워커 라우트 유무' 기준이라 부를 워커가 있으면 명확화가 섞여 있어도 dispatch로 보낸다.
+- **`run_turn(state, user_input)`**: 진입점. 턴 카운터 증가 → user 메시지 적재 → 턴 임시필드 초기화(`open_proposal`에 턴 시작 `pending_confirmations[0]` 스냅샷, `confirmation_consumed=False`) → `graph.ainvoke` → assistant 응답을 messages에 누적.
 
 ---
 
@@ -127,20 +141,24 @@ START
 
 ### 3.0 `confirm_resolve_node` (`nodes/confirm.py`)
 
-**토폴로지상 맨 앞(START 직후)** — `pending_confirmations`가 비어 있으면 no-op이라 일반 턴엔 영향이 없다. 큐에 보류 건이 있으면(직전 턴에 fill이 애매하다고 판단해 쌓아둔 것), 이번 사용자 발화를 그 확인 질문에 대한 답으로 보고 LLM이 판정:
-- `pick`: 후보 슬롯 중 하나를 고르거나 긍정 → 그 슬롯에 보류값 주입(이미 찬 슬롯이면 덮지 않음) + 큐에서 제거.
-- `reject`: "아니/빼" 등 부정 → 큐에서 제거(슬롯은 빈 채).
-- `unclear`: 그 질문과 무관한 다른 얘기 → `confirm_kind`로 가른다. `commit`(결정 미확정)은 드롭(결정 안 한 건 안 채운다), `slot`(값은 결정, 칸만 모름)은 `attempts++` 후 한도(2회) 넘으면 제안 슬롯으로 자동 확정(무한 재질문 방지).
+**토폴로지상 맨 앞(START 직후)** — `pending_confirmations`가 비어 있으면 no-op이라 일반 턴엔 영향이 없다. 큐에 보류 건이 있으면, 이번 사용자 발화를 그 제안에 대한 답으로 보고 **태도(decision)**를 LLM이 판정한다(명령형 "이대로 넣어/넣어"도 제안에 대한 긍정이면 accept — 새 리서치 주문이 아니다; 보기는 예시지 정답 키워드가 아니라 의미로 판단):
+- `accept`: 제안대로 넣으라는 긍정·명령 → 제안 슬롯에 주입(`replace`면 기존 값 덮어쓰기 + correction_log 기록; 그 외엔 이미 찬 슬롯을 덮지 않음) + 큐 제거.
+- `pick`: 후보 둘 이상에서 하나 선택 → 그 슬롯 주입 + 큐 제거.
+- `reject`: "아니/빼" 부정 → 큐에서 제거(슬롯 그대로).
+- `revise`: 값을 고쳐서 넣으라 → 스테일 값 버리고 큐 제거, 주입 안 함(고친 값은 파이프라인이 다시 뽑음).
+- `unrelated`: 그 질문과 무관한 다른 얘기 → `confirm_kind`로 가른다. `commit`(결정 미확정)·`replace`(교체 확인)는 드롭(결정/교체 안 한 건 안 건드린다), `slot`(값은 결정, 칸만 모름)은 `attempts++` 후 한도(2회) 넘으면 제안 슬롯으로 자동 확정(무한 재질문 방지).
 
-해소 후에도 파이프라인은 계속 흐른다 — 같은 발화에 추가 정보가 있으면 segment 이하가 정상 처리하고, 방금 채운 슬롯은 더 이상 empty가 아니라 fill이 다시 건드리지 않는다.
+**소비(consumed) 신호**: 순수 확인 답(accept/pick/reject + `has_additional_content=false`)이면 `confirmation_consumed=True`를 내보내 `_post_confirm_branch`가 segment 이하를 건너뛴다(§2) — 열린 제안에 대한 답을 새 리서치 주장으로 재처리하던 회귀를 끊는다. 추가 내용이 섞였거나(`has_additional_content`) revise·unrelated면 파이프라인이 계속 흐르고, 같은 발화의 새 내용은 segment 이하가 정상 처리한다(방금 채운 슬롯은 더 이상 empty가 아니라 fill이 다시 건드리지 않는다).
+> 예전 `pick/reject/unclear` 3분류에선 명령형 "이대로 넣어"가 `unclear`로 떨어져 commit-kind 값을 **드롭**(값 손실)하고, 그 발화가 segment·dispatch로 흘러 다시 리서치됐다 — 이 두 버그를 태도 5분류 + consumed 분기로 함께 막는다.
 
 ### 3.1 `segment_node` (`nodes/segment.py`)
 
-긴 발화를 **의미 단위로 나누고** 각 조각을 **그 문장만 봐도 뜻이 통하는 문장(`canonical_text`)** 으로 복원.
-- 입력 프롬프트: 현재 슬롯 스냅샷 + 최근 대화 10턴 + 이번 발화.
+긴 발화를 **의미 단위로 나누고** 각 조각을 **그 문장만 봐도 뜻이 통하는 문장(`canonical_text`)** 으로 복원. **딱 두 가지만 한다 — 분할과 맥락 복원. 슬롯은 고르지 않는다**(예전엔 `target_slot_hint`까지 떠안아 `slot_guide_text()` 전체를 프롬프트에 싣느라, 모델이 슬롯·값에 과몰입해 확인 답("이대로 넣어")을 대기 값으로 부풀려 선언문으로 만들곤 했다 — 그게 그 발화를 claim으로 끌고 가 재리서치되는 회귀의 발화원이었다).
+- 입력 프롬프트: 현재 슬롯 스냅샷 + **`[대화 상태]`**(`conversation_state_text`: 열린 제안·직전 질문 슬롯, 있을 때만) + 최근 대화 10턴 + 이번 발화. `slot_guide_text()`는 더 이상 싣지 않는다.
 - **맥락 복원 강화**: 여러 턴에 걸친 지시어 추적(직전 턴이 아니어도 가리키는 대상 연결, 정정 후 값 우선), 확정된 고유명사·수치 우선 복원("거기 시장"→"일본 시장"), 슬롯이 비어 있어도 주어 복원(복원 대상은 사업 도메인 한정 — 대화 화자 '어시스턴트/사용자'는 주어로 넣지 않음). 단서가 없으면 원문 유지(없는 맥락은 지어내지 않음). 되묻기·확인 발화("아까 ~라 했잖아?")는 말한 주체를 지어내지 말고 되묻는 내용만 복원.
-- LLM이 `{text, canonical_text, target_slot_hint}` 배열 반환.
-- 프롬프트에 `slot_guide_text()`(정의·경계)를 임베드 — `target_slot_hint`를 슬롯 *이름*이 아니라 *정의*로 고른다. 10개 화이트리스트 검증, 경계가 헷갈리면 null로 두고 슬롯 확정은 fill에 위임.
+- **열린 제안에 대한 답**(`[대화 상태]`에 확인 대기·직전 질문 슬롯이 있을 때): "이대로 넣어/빼/솔루션에 넣어/고쳐서"는 사업 주장으로 부풀리지 말고(대기 값을 주어로 끌어오지 않음) 답의 뜻만 간결히 남긴다. 직전 질문 슬롯에 대한 짧은 답은 그 슬롯의 답으로 자연스럽게 복원.
+- **어시스턴트에게 청하는 제안 요청 프레이밍 보존**: "네 생각엔 뭐가 좋아?"·"네가 생각하는 문제는 뭐야?"·"추천해줘"·"정해줘"처럼 어시스턴트의 판단을 청하는 발화는 일반 사실 질문이나 사업 주장으로 고쳐쓰지 않고 **'청하는' 틀을 유지**한다 — 무엇에 대한 제안인지(주제·슬롯)만 맥락으로 복원하고 "네 생각/추천" 지시는 그대로 둔다. 예(이전 맥락: 커피 사업): `"네 생각엔 우리 문제가 뭐야?"` → `"네 생각엔 커피 사업의 문제가 뭐야?"`(O) / `"커피 사업의 문제는 무엇인가?"`(X). **왜 중요한가** — segment→classify는 한 방향이라, segment가 이 신호를 지워 평범한 질문으로 만들면 classify가 `reason`이 아니라 `question`으로 보고 리서치를 돌린다(복구 불가). 실제로 이 규칙이 없을 때 "네 생각엔 우리 문제가 뭐야?"가 "커피 사업의 문제는 무엇인가?"로 정규화돼 워커가 잘못 발동하는 회귀가 통합 테스트(`test_no_worker_routing_live`)에서 잡혔다.
+- LLM이 `{text, canonical_text}` 배열 반환. **`target_slot`은 항상 `None`으로 둔다** — 슬롯 확정은 fill·correction이 정의·경계로 한다(§3.4).
 - 빈 발화면 `[]`, 세그먼트 0개면 원문 1개로 폴백.
 
 ### 3.2 `classify_node` (`nodes/classify.py`)
@@ -159,15 +177,17 @@ START
 | meta | (interaction — 워커 호출 없음) | | | |
 | recall | (interaction — conversation이 이력에서 답) | | | |
 | tool_help | (interaction — conversation이 SLOT_SPECS·APP_OVERVIEW에서 답) | | | |
+| reason | (interaction — conversation이 누적 근거·대화이력에서 직접 추론·제안) | | | |
 
 > `claim`(사실·가설·결정·제약·근거 있는 가치판단)은 research+rag+logic_validator 모두 발동 — 라우팅이 같아 한 유형으로 묶는다(구 `opinion` 포함).
-> interaction(`meta`·`recall`·`tool_help`)은 빈 집합 → `derive_routes`가 `["none"]`. 키를 지우지 않고 빈 집합으로 두는 이유: 라벨이 `_VALID_TYPES` 필터를 통과해 살아남아야 conversation·correction이 그 라벨을 본다.
-> **interaction-precedence**: interaction 라벨이 content 라벨과 한 세그먼트에 섞이면 `classify_node`가 content를 떨군다(`_INTERACTION_TYPES`). `derive_routes`가 라우트를 **합집합**해서 `["tool_help","claim"]`이면 claim의 워커 라우트가 살아 새기 때문 — 프롬프트도 이들을 단독으로 두라 하지만 "누구를 부를지는 코드"라 backstop으로 강제한다.
+> interaction(`meta`·`recall`·`tool_help`·`reason`)은 빈 집합 → `derive_routes`가 `["none"]`. 키를 지우지 않고 빈 집합으로 두는 이유: 라벨이 `_VALID_TYPES` 필터를 통과해 살아남아야 conversation·correction이 그 라벨을 본다.
+> **interaction-precedence**: interaction 라벨이 content 라벨과 한 세그먼트에 섞이면 `classify_node`가 content를 떨군다(`_INTERACTION_TYPES = {meta, recall, tool_help, reason}`). `derive_routes`가 라우트를 **합집합**해서 `["tool_help","claim"]`이면 claim의 워커 라우트가 살아 새기 때문 — 프롬프트도 이들을 단독으로 두라 하지만 "누구를 부를지는 코드"라 backstop으로 강제한다.
 > 검증 세부(전제 vs 사실 vs 결정 배경)는 오케가 아니라 리서치 쿼리 분해기가 claim·slot_context를 보고 정한다.
 
 - `derive_routes`: 여러 라벨의 활성 클러스터 **합집합**, `[clarify, research, rag, logic_validator, none]` 순서로 정렬.
 - segment가 미리 박은 라벨 보존 + LLM 추가 라벨 머지(화이트리스트·중복 제거), 둘 다 없으면 `clarification_needed` 기본값(분류 실패 시 안전 폴백 — `_VALID_TYPES`를 통과하고 `clarify`만 타 워커 비용 0; claim 폴백은 실패 턴마다 워커를 터뜨린다).
-- LLM 호출은 **세그먼트 전체 배치 1회**(호출 절약, payload에 최근 대화도 실어 `recall` 판정), 개수 어긋나면 LLM 결과 폐기.
+- LLM 호출은 **세그먼트 전체 배치 1회**(호출 절약), payload에 **`[대화 상태]`**(`conversation_state_text`: 열린 제안·직전 질문 슬롯)·**`[현재 슬롯]`**(`slot_snapshot_text`: 충돌·되묻기 판정용 값)·최근 대화를 함께 실어 맥락에서 판단하게 한다(예전엔 `[최근 대화]`만 — 슬롯값을 못 봐 충돌을 인지 못 했다). 개수 어긋나면 LLM 결과 폐기.
+- **상태 인지 규칙(프롬프트 가이드, 라우팅은 여전히 코드)**: ① 열린 제안에 대한 답(수락 "이대로 넣어"·거부 "빼"·슬롯 선택 "솔루션에 넣어")은 `meta`로 둔다 → 워커 미발동(딸린 새 내용은 별개 세그먼트로 평소대로). 순수 확인 답은 보통 `_post_confirm_branch`가 classify 전에 우회하지만, 추가 내용 섞인 fall-through 턴에서 잔여 확인절이 재디스패치되는 걸 이 규칙이 막는다. ② 직전 질문 슬롯에 대한 짧은 답은 `claim`(채울 답)으로 — 짧다고 `clarification_needed`로 떨구지 않는다. ③ 슬롯 기준에 비해 **공허한 답**(goal에 "결과물", target에 "사람들" — 수치·구체 대상 없음)은 `claim`이 아니라 `clarification_needed`로 라벨해 리서치 대신 되묻는다(충분성 게이트의 coarse 단계; 정밀 판정은 fill, §3.4). ④ **어시스턴트에게 판단·제안을 청하는 답**("네 생각엔 뭐가 좋아?", "추천해줘", "정해줘")은 새 외부 사실을 묻는 게 아니라 가진 것으로 답하라는 뜻이라 `reason`으로 둔다(맥락 지시어 '여기서·방금'이 없어도) → 워커 미발동. 새 외부 대상의 사실을 물으면 `question`. 이 ④가 빠지면 "네 의견 달라"가 `question`으로 새 리서치를 돌린다 — segment가 프레이밍을 보존해야(§3.1) classify가 이 신호를 본다.
 
 ### 3.3 `correction_node` (`nodes/correction.py`)
 
@@ -180,16 +200,18 @@ START
 
 ### 3.4 `extract_slot_fills_node` (`nodes/correction.py`)
 
-dispatch 경로에서만 실행 (그래프상 dispatch 다음). **비어있는 슬롯**에 들어갈 값을 세그먼트에서 추출하고, **슬롯 선택의 단일 권위**다(segment의 `target_slot` 힌트는 payload에 prior로만 넘겨 두 판단이 갈리는 걸 줄인다).
-- 후보 = `claim` 라벨 가진 세그먼트. 빈 슬롯 없으면 LLM 호출 안 함 (비용 절약).
-- `_FILL_SYSTEM`에 `slot_guide_text()` + **`[직전 대화]`(recent_history)** 임베드. LLM은 fill마다 `{slot, value, kind(decision|exploration), confidence(clear|ambiguous), alt_slots[], reason}` 반환. 두 축을 가린다 — `kind`(사용자가 그 값을 **결정**했나)와 `confidence`(**어느 슬롯**인지 명확한가).
-- `kind=decision` 기준: (a) 명시적 확정("X로 하자/가자/정했어") 또는 (b) 직전에 어시스턴트가 물은 슬롯 질문에 직접 답함. 단순 탐색·가설("X가 좋을 것 같은데", "X는 어때?")은 `exploration`. 애매하면 `exploration`.
-- (b)는 **결정론 안전망**으로 보강한다 — `conversation_node`가 `ask_slot`을 물 때 `last_asked_slot`을 기록하고, fill은 그 슬롯에 대한 답이면 LLM이 보수적으로 `exploration`을 줘도 `decision`으로 승격한다(정상 슬롯 답변이 확인 질문으로 새는 과차단 방지 — mini 추론 모델이 짧은 명사구 답을 탐색으로 보는 경향을 막는다).
-- 쓰기 게이트 **세 갈래**:
-  - **결정 + 슬롯 명확** → 빈 슬롯에 즉시 주입(`source_label=USER`). 이미 찬 슬롯은 correction_node 담당.
-  - **결정 + 슬롯 애매**(`ambiguous` 또는 `alt_slots`) → 주입하지 않고 `pending_confirmations`(`confirm_kind="slot"`)에 쌓음(후보 중 빈 슬롯이 하나도 없으면 스킵). 다음 턴 `confirm_resolve`가 "어느 슬롯?" 답으로 확정.
-  - **탐색** → 주입 안 함. 채울 수 있는 빈 슬롯이면 `pending_confirmations`(`confirm_kind="commit"`, **턴당 1건**)에 쌓아 "이거 X에 넣을까요?"를 묻고, 미응답이면 `confirm_resolve`가 드롭(결정 안 한 건 안 채운다).
-- → "결정 안 한 값이 슬롯에 박히는" 문제와 "같은 내용이 다른 슬롯에 들어가는" 문제를 (a)경계 명문화 (b)선택 단일화 (c)결정/탐색 분리 + 확인으로 막는다.
+dispatch 경로에서만 실행 (그래프상 dispatch 다음). 세그먼트에서 슬롯 값을 추출해 주입/확인하고, **슬롯 선택의 단일 권위**다(segment는 더 이상 힌트를 주지 않으므로 — 정의·경계만으로 정한다).
+- 후보 = `claim` 라벨 가진 세그먼트. (빈 슬롯이 없어도 충돌 교체 감지를 위해 호출한다 — 예전의 "빈 슬롯 없으면 스킵"은 제거.)
+- `_FILL_SYSTEM`에 `slot_guide_text()` + **`[직전 대화]`(recent_history)** + `[현재 슬롯]`·`[비어있는 슬롯]` 임베드. LLM은 fill마다 `{slot, value, kind(decision|exploration), confidence(clear|ambiguous), alt_slots[], reason, adequate}` 반환. 축: `kind`(**결정**했나)·`confidence`(**어느 슬롯**인지 명확)·`adequate`(값이 슬롯 정의의 **알맹이**를 갖췄나).
+- `kind=decision` 기준: (a) 명시적 확정("X로 하자/가자/정했어") 또는 (b) 직전에 어시스턴트가 물은 슬롯 질문에 직접 답함. 단순 탐색·가설은 `exploration`. (b)는 **결정론 안전망** — `conversation_node`가 `ask_slot` 때 `last_asked_slot`을 기록하고, fill은 그 슬롯 답이면 LLM이 `exploration`을 줘도 `decision`으로 승격(짧은 명사구 답이 확인 질문으로 새는 과차단 방지).
+- 쓰기 게이트:
+  - **이미 찬 슬롯 + 다른 값(결정, 정정 마커 없음)** → 덮어쓰지 않고 `pending_confirmations`(`confirm_kind="replace"`, `previous_value`=기존 값)에 쌓아 다음 턴 "바꿀까?"를 확인 — 사용자의 새 값이 묵살되던(찬 슬롯이라 fill이 건드리지 않고 correction도 안 도는) 문제를 막는다. 명시적 정정("빼/말고")은 그대로 correction_node가 직접 적용(확인 불필요).
+  - **결정 + 공허(`adequate=false`)** → 채우지 않고 비워둔다(다음 턴 빈칸으로 되묻기). "골은 결과물"처럼 슬롯 기준 미달 값이 박히는 걸 막는 충분성 게이트의 정밀 단계(coarse는 classify, §3.2).
+  - **결정 + 슬롯 명확 + 충분** → 빈 슬롯에 즉시 주입(`source_label=USER`).
+  - **결정 + 슬롯 애매**(`ambiguous`/`alt_slots`) → `pending_confirmations`(`confirm_kind="slot"`)에 쌓음(후보 중 빈 슬롯 없으면 스킵). 다음 턴 "어느 슬롯?" 답으로 확정.
+  - **탐색** → 주입 안 함. 빈 슬롯이면 `pending_confirmations`(`confirm_kind="commit"`, **턴당 1건**)에 쌓아 "이거 X에 넣을까요?"를 묻고, 미응답이면 드롭.
+- **근거 슬롯 태그(Part 1)**: 처리한 각 fill의 슬롯을 아직 태그 없는 `claim` 세그먼트에 순서대로 단다(`target_slot`) — segment가 더는 힌트를 주지 않으므로, `run_turn`의 evidence→슬롯 백필(§1)이 쓸 연결을 fill이 채운다.
+- → "결정 안 한 값이 박히는"·"같은 내용이 다른 슬롯에"·"공허한 값이 박히는"·"찬 슬롯 새 값이 묵살되는" 문제를 경계 명문화 + 선택 단일화 + 결정/탐색/충분성/충돌 분리 + 확인으로 막는다.
 
 ### 3.5 `parallel_dispatch_workers_node` (`nodes/dispatch.py`)
 
@@ -203,30 +225,31 @@ dispatch 경로에서만 실행 (그래프상 dispatch 다음). **비어있는 �
 research → run_research(subject) → report              # asyncio.as_completed; report를 idx로 보관
 rag      → run_rag_check(subject) → (report, rag_result)
 #   완료 즉시 emit(validation_report); 반환 리스트는 디스패치 순서로 재구성(결정론)
-# 2단계: 논리검증 — 1단계 전체 완료 뒤(배리어), 같은 세그먼트의 RAG 산출물 + (claim이면) research report를 입력으로
-logic_validator → run_logic_validator(subject, rag_result, research_report)   # asyncio.as_completed
+# 2단계: 논리검증 — 1단계 전체 완료 뒤(배리어), 같은 세그먼트의 RAG 산출물이 있는 타깃만
+logic_validator → run_logic_validator(subject, rag_result)   # rag_result 있을 때만 호출; asyncio.as_completed
 ```
 > **왜 2단계인가** — `logic_validator`(validator 엔진)는 RAG가 회수한 근거(highlight·raw_source)가
 > claim을 논리적으로 지지하는지 판정하므로, 1단계 RAG 산출물 `RagExtractorResult`가 먼저 있어야
 > 한다. RAG는 `(ValidationReport, RagExtractorResult)`를 돌려주고 dispatch가 그 원본을 2단계로
 > 넘긴다(프론트엔 ValidationReport만 발행 — 단 사내 원문은 `report.citations`의 `raw_source`로 전달).
-> 매트릭스상 logic_validator는 claim에서 rag와 동반하지만, `evidence_mode`로 rag를 끄거나 RAG가
-> 근거를 못 찾으면(`rag_result=None`) research 리포트만으로, 둘 다 없으면 "근거 없음"으로 흐른다.
+> 매트릭스상 logic_validator는 claim에서 rag와 동반하지만 **RAG 전용 판정**이다 — `evidence_mode`로
+> rag를 끄거나(research 전용) RAG가 근거를 못 찾으면 `rag_result`가 없어 2단계에서 **제외**된다
+> (불필요한 "근거 없음" 카드를 만들지 않는다). 외부 리서치 근거판단은 research 워커가 자체 agreement로 따로 낸다.
 >
 > **`evidence_mode` 토글(both/research/rag)** — 사용자가 프론트에서 고른 근거 출처 범위를 `run_turn`이
 > state에 싣고, 1단계에서 `research`/`rag` 디스패치를 이걸로 거른다(`both`=둘 다, `research`=웹만,
 > `rag`=사내문서만). `derive_routes`(classify)는 순수하게 두고 **디스패치 단계에서만** 거르며,
-> `logic_validator`는 토글과 무관하게 claim이면 항상 돈다(가능한 근거로 판정). 최소 한쪽은 늘 켜진다.
+> `logic_validator`는 같은 idx의 `rag_result` 유무를 따라간다(research 전용이면 RAG가 없어 자연히 안 돈다). 최소 한쪽은 늘 켜진다.
 >
 > **발행은 완료순, 반환은 디스패치순** — 1단계는 `asyncio.as_completed`로 먼저 끝난 워커(웹/사내문서)의
 > 결과 카드부터 발행해 사용자가 둘 다 끝나길 기다리지 않게 한다. 다만 `turn_validation_reports`·
 > `turn_evidence`는 등장 순서로 되돌려 다운스트림을 결정론으로 유지한다(`session_evidence` 누적은
 > `(subject,cluster)` 중복 제거라 순서 무관).
 >
-> **research 보조 근거 통합**: claim 세그먼트에선 같은 세그먼트의 1단계 research 결과(findings·sources)를
-> 텍스트로 묶어 보조 근거로 함께 넘긴다. validator는 `research_evidence`(Optional[str]) 인자로 하위호환
-> 확장돼 — 인자 없으면 user_msg가 기존과 바이트 동일 — **사내 RAG 근거를 1차, 외부 research를 보조**로
-> 본다. (logic_validator는 claim에서만 발동하고 claim은 항상 research를 함께 타므로 보조 근거가 늘 따라온다; research가 비면 `research_report=None` 폴백.)
+> **두 근거판단 분리**: RAG 근거판단과 외부 리서치 근거판단을 따로 낸다. `logic_validator`는 **사내 RAG 근거만**
+> 판정하고(research를 섞지 않음), 외부 리서치의 근거판단은 research 워커가 자체 `agreement`로 1단계에서 따로
+> 낸다(각각 별도 카드). validator 엔진(`run_validator`)은 `research_evidence`(Optional[str]) 인자를 그대로
+> 두되 dispatch는 더 이상 채우지 않는다(항상 `None`).
 >
 > **역할 분담**: `rag`는 retrieval만(`agreement=unknown`), `logic_validator`는 판정만
 > (verdict→agreement: supports→confirms / contradicts→contradicts / insufficient→partial /
@@ -251,9 +274,10 @@ logic_validator → run_logic_validator(subject, rag_result, research_report)   
 ### 3.7 `conversation_node` (`agents/conversation/agent.py`)
 
 state에서 **intent 목록을 결정론으로 뽑아**(`_build_intents`) **LLM 1회로 한 응답으로 렌더** (대화 에이전트). conversation_spec TRIGGER MATRIX 전체를 지원:
-`ask_slot · confirm_slot · clarify · report_findings · answer_question · recall · explain_tool · redirect · acknowledge · deliver_plan`.
+`ask_slot · confirm_slot · clarify · report_findings · answer_question · recall · explain_tool · reason_over_context · redirect · acknowledge · deliver_plan`.
 > 구현 차이: conversation_spec은 `report_research`·`report_critique`를 별도 intent로 두지만, 코드는 한 주제의 research·rag·logic_validator 결과를 **`report_findings` 하나로 통합**해 넘긴다(렌더 프롬프트가 출처별로 구분). spec이 "둘은 한 턴에 묶일 수 있다(통합은 integrator 몫)"고 한 것을 그대로 반영.
-- **intent 선택(결정론)**: 이번 턴 정정→`acknowledge`, `recall` 라벨 세그먼트→`recall`(대화 이력에서 답), `tool_help` 라벨 세그먼트→`explain_tool`(SLOT_SPECS·APP_OVERVIEW에서 답, in_scope 무관), `pending_confirmations`→`confirm_slot`(보류값과 후보 슬롯 제시), `in_scope=false`→`redirect`(단 tool_help 세그먼트는 건너뛴다 — explain_tool 우선), `turn_validation_reports`→주제별 `report_findings`(claim) 또는 `answer_question`(question), `clarify` 라우트→`clarify`. 위에서 막지 않았고 **확인 대기(`confirm_slot`)도 없으면** `ALL_SLOTS` 첫 빈칸으로 `ask_slot`(recall·explain_tool·confirm_slot·clarify가 있으면 다음 질문 보류). 빈칸이 하나도 없으면 `deliver_plan`(ready)로 준비됐다고 안내.
+- **intent 선택(결정론)**: 이번 턴 정정→`acknowledge`, `recall` 라벨 세그먼트→`recall`(대화 이력에서 답), `tool_help` 라벨 세그먼트→`explain_tool`(SLOT_SPECS·APP_OVERVIEW에서 답, in_scope 무관), `reason` 라벨 세그먼트→`reason_over_context`(누적 근거 `session_evidence`+대화이력을 재료로 실어 직접 추론·제안, in_scope 무관), `pending_confirmations`→`confirm_slot`(보류값과 후보 슬롯 제시; `confirm_kind="replace"`면 기존 값 `previous`를 실어 "X로 바꿀까?"로 물음), `in_scope=false`→`redirect`(단 tool_help·reason 세그먼트는 건너뛴다 — explain_tool·reason_over_context 우선), `turn_validation_reports`→주제별 `report_findings`(claim) 또는 `answer_question`(question), `clarify` 라우트→`clarify`. 위에서 막지 않았고 **확인 대기(`confirm_slot`)도 없으면** `ALL_SLOTS` 첫 빈칸으로 `ask_slot`(recall·explain_tool·reason_over_context·confirm_slot·clarify가 있으면 다음 질문 보류). 빈칸이 하나도 없으면 `deliver_plan`(ready)로 준비됐다고 안내.
+> **`reason_over_context`의 두 모드** — `reason` 발화가 ① **종합 요청**이면 가진 근거를 1~5문장으로 정리해 전하고, ② **제안·결정 요청**("네 생각엔 문제가 뭐야?")이면 **되묻지 않고** 그 슬롯에 들어갈 구체적 후보를 직접 제안하고 채택/수정을 한 문장으로 묻는다. 어느 슬롯인지는 코드가 주입하지 않고 LLM이 `subject`("…문제는…")와 `slots` 상태로 정한다(표현 결정은 LLM 몫). 예: 누적 근거에 "저가 커피 포화·수익성 악화"가 있을 때 `"네 생각엔 우리 문제가 뭐야?"` → **"모은 걸 보면 저가 커피 포화로 신규 점포 수익성이 떨어지는 게 핵심 문제 같아 — 이렇게 잡아볼까?"**. 근거가 비면 일반 추론으로 한 후보를 던지되 부족함을 밝히고 무엇을 먼저 찾을지 한 문장으로 잇는다. **회귀 배경**: 예전엔 제안 요청이 `question`으로 흘러 또 리서치를 돌리거나, 막판 `ask_slot`이 같은 질문("누가·어떤 상황에서…")을 사용자에게 되묻던 — "네 의견을 달라"는데 의견을 안 주는 회피였다. classify의 reason 확장(§3.2 ④) + segment의 프레이밍 보존(§3.1) + 이 제안 모드가 한 세트로 이 회피를 막는다.
 - **렌더(LLM)**: intent 목록 JSON(+최근 대화 `recent_messages`)을 받아 한 메시지로 매끄럽게 연결(예: 결과 보고 → 다음 질문). `recent_messages`는 `recall` intent를 답할 때만 근거로 쓴다. 슬롯별 질문 톤은 `SLOT_SPECS[...]["question"]`(단일 원천)에서 가져와 `ask_slot.example`로 주입.
 - **분류·판단은 안 함** — 무엇을 보고/질문할지는 state에서 파생, 대화는 표현만.
 
@@ -285,7 +309,7 @@ state에서 **intent 목록을 결정론으로 뽑아**(`_build_intents`) **LLM 
 
 | 메시지 종류 | 워커 호출 | 슬롯 변경 | 분기 |
 |---|---|---|---|
-| 신규 단일 발화 | 라벨에 따라 | 잠재적 | 7유형 라벨링 → 매트릭스 |
+| 신규 단일 발화 | 라벨에 따라 | 잠재적 | 8유형 라벨링 → 매트릭스 |
 | 신규 다중 발화 | 세그먼트별 병렬 | 잠재적 | 라우트별 분기 |
 | 정정 신호 | (재검증 보류 — 아래 갭) | **필수** | correction_node 먼저 |
 | 출력 요청("뽑아줘") | 없음 (생성은 버튼 `POST /plan`) | 없음 | 채팅엔 gate 없음 — `meta`로 흐름 |
@@ -293,15 +317,19 @@ state에서 **intent 목록을 결정론으로 뽑아**(`_build_intents`) **LLM 
 | 메타·단순응답 | 없음 | 없음 | interaction(`meta`) — "응"·"다음" 등 |
 | 되묻기 | 없음 | 없음 | interaction(`recall`) — 대화 이력에서 답("아까 ~라며?") |
 | 툴/슬롯 질문 | 없음 | 없음 | interaction(`tool_help`) — SLOT_SPECS·APP_OVERVIEW로 답("솔루션 슬롯이 뭐야?") |
+| 추론·제안 요청 | 없음 | 없음 | interaction(`reason`) — 누적 근거·대화이력에서 직접 추론·제안("여기서 문제점 추론해봐", "네 생각엔 문제가 뭐야?") |
 | 애매한 슬롯 값(어느 칸) | 라벨에 따라 | 보류→확인 후 | fill `ambiguous` → `confirm_slot`(slot) → 다음 턴 `confirm_resolve` |
 | 탐색·미결정 값 | 라벨에 따라 | 보류→확인 후(미응답 드롭) | fill `kind=exploration` → `confirm_slot`(commit, "이거 X에 넣을까요?") |
+| 확인 응답(넣어/빼/바꿔) | 없음 | confirm_resolve가 반영 | 순수 답이면 `confirmation_consumed` → `_post_confirm_branch`로 segment 이하 우회 |
+| 공허한 슬롯 답("골=결과물") | 없음(되묻기) | 안 채움 | classify `clarification_needed`(coarse) / fill `adequate=false`(정밀) → 구체화 요청 |
+| 찬 슬롯과 충돌(타깃 교체) | 라벨에 따라 | 보류→교체 확인 후 | fill `confirm_kind="replace"` → `confirm_slot`("X로 바꿀까?") |
 
 > **신호 키워드 정확도**("말고"·"빼자"·"뽑아줘")가 성능의 큰 부분. 첫 단계인
 > 메시지 종류 판단이 어긋나면 그 턴 전체가 어긋난다.
 
 ### 기획서 대비 보강·갭
 
-- **보강 (코드 > 기획서)**: 발화 유형 `question`·`recall`·`tool_help` 추가·`opinion` 제거(→`claim` 흡수)·`meta`를 interaction tier로 — 총 7종(content 4 + interaction 3). 슬롯 `advantage`(차별점) 추가(총 10개).
+- **보강 (코드 > 기획서)**: 발화 유형 `question`·`recall`·`tool_help`·`reason` 추가·`opinion` 제거(→`claim` 흡수)·`meta`를 interaction tier로 — 총 8종(content 4 + interaction 4). `reason`은 종합·도출뿐 아니라 "어시스턴트에게 의견·제안을 청하는 발화"까지 흡수해, 워커 없이 누적 근거로 제안하게 한다. 슬롯 `advantage`(차별점) 추가(총 10개).
 - **알려진 갭 (코드 < 기획서)**: 정정(correction) 시 교체된 슬롯 값의 **재검증 미동작**.
   기획서 5장은 리서치·RAG '재발동'을 요구하지만 현재는 슬롯 덮어쓰기만 함
   (`correction.py`의 TODO). 실 워커 연결 시 구현 예정.
@@ -328,10 +356,10 @@ agents/orchestrator/
 ├─ llm.py                call_json (키 필수, 구조화 출력)
 ├─ ORCHESTRATOR.md       (이 문서)
 └─ nodes/
-   ├─ confirm.py         애매한 슬롯 주입 확인 해소 (pending 큐, START 직후)
-   ├─ segment.py         세그멘테이션 + 맥락 복원
-   ├─ classify.py        다중 라벨 + 라우팅 매트릭스
-   ├─ correction.py      정정 해소 + 슬롯 채움 (애매하면 pending 큐로 보류)
+   ├─ confirm.py         제안 확인 해소 (accept/pick/reject/revise/replace + consumed 분기, START 직후)
+   ├─ segment.py         세그멘테이션 + 맥락 복원 (슬롯 미선택 — 분할·복원만)
+   ├─ classify.py        다중 라벨 + 라우팅 매트릭스 (대화 상태·현재 슬롯 인지)
+   ├─ correction.py      정정 해소 + 슬롯 채움 (충분성·교체·애매 → pending 큐)
    ├─ dispatch.py        리서치·RAG 병렬 → 논리검증 2단계 호출
    └─ integrator.py      응답 통합 (결정론)
 

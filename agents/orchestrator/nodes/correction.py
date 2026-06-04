@@ -168,9 +168,10 @@ _FILL_SYSTEM = (
 - confidence: 경계 규칙으로 한 슬롯에 명확히 들어맞으면 "clear", 두 슬롯 이상에 그럴듯해 단정하기 어려우면 "ambiguous".
 - alt_slots: "ambiguous"일 때 함께 후보가 되는 다른 슬롯들(명확하면 빈 배열).
 - reason: "ambiguous"라면 왜 헷갈리는지 한 구절(예: "과금 방식이자 솔루션 형태로 모두 읽힘").
+- adequate: 값이 그 슬롯 정의가 요구하는 알맹이를 갖췄으면 true. 갖추지 못해 공허하면 false — 예: goal에 "결과물"·"잘 됐으면"(수치·기한 없음), target에 "사람들"·"누구나"(구체 대상 없음). 값이 슬롯 내용이 아니라 "그 슬롯이 아직 비었다"는 사실을 서술하는 비-답(예: "명시되지 않음", "제공되지 않음", "해당 없음", "알 수 없음")이면 값이 없는 것이니 false다 — 그런 비-답을 value로 지어내지 말고 fill을 내지 마라. false면 코드가 채우지 않고 되묻는다.
 
-세그먼트에 붙은 [힌트:슬롯]은 참고만 한다 — 정의와 경계가 우선이다.
-이미 채워진 슬롯은 건드리지 마라(정정 노드가 처리함). 억지로 하나로 밀어넣지 말고, 진짜 경계선이면 "ambiguous"로 둔다.
+억지로 하나로 밀어넣지 말고, 진짜 경계선이면 "ambiguous"로 둔다.
+이미 채워진 슬롯은 보통 건드리지 마라(정정은 correction이 처리). 단, 사용자가 정정 마커("빼/말고/취소") 없이 이미 찬 슬롯을 분명히 '다른 값으로' 다시 정하면, 그 슬롯과 새 값을 kind=decision으로 뽑아라 — 코드가 "바꿀까?"를 확인한다(여기서 직접 덮어쓰지 않는다).
 
 kind 예:
 - [직전 대화] [assistant] "타겟이 누구예요?" / [user] "네이버 콘텐츠 운영팀" → target, kind=decision (물은 슬롯에 직접 답)
@@ -187,6 +188,7 @@ class FillItem(BaseModel):
     confidence: Literal["clear", "ambiguous"] = "clear"  # 기본 clear (하위호환)
     alt_slots: list[str] = Field(default_factory=list)   # ambiguous일 때 다른 후보
     reason: str = ""                                     # 왜 애매한지(확인 질문 문구용)
+    adequate: bool = True                                # 값이 슬롯 정의의 알맹이를 갖췄나 — False면 안 채우고 되묻는다
 
 
 class FillOut(BaseModel):
@@ -194,35 +196,30 @@ class FillOut(BaseModel):
 
 
 async def extract_slot_fills_node(state: PlanState) -> dict:
-    """빈 슬롯에 들어갈 값을 추출해 즉시 주입하거나 확인 큐로 보낸다 →
-    {"slots","turn_segments","pending_confirmations"}(없으면 {})."""
+    """claim 세그먼트에서 슬롯 값을 추출해 즉시 주입하거나 확인 큐로 보낸다 →
+    {"slots","turn_segments","pending_confirmations"}(없으면 {}).
+
+    - 빈 슬롯: 결정+명확 → 즉시 주입(단 값이 공허하면 안 채우고 비워둔다 — 다음 턴 되묻기),
+      결정+애매 → slot 확인 큐, 탐색 → commit 확인 큐(턴당 1건).
+    - 이미 찬 슬롯: 정정 마커 없이 '다른 값'으로 다시 정하면 replace 확인 큐(교체는 확인 후에만).
+    - dispatch된 claim 세그먼트엔 근거→슬롯 연결용 target_slot을 태그한다(segment가 더는 슬롯
+      힌트를 주지 않으므로). [직전 대화]는 kind 판정 (b)("방금 물은 슬롯에 직접 답했나") 근거.
+    """
     segments = state.get("turn_segments") or []
-    candidates = [
-        s
-        for s in segments
-        if "claim" in (s.get("utterance_types") or [])
-    ]
+    candidates = [s for s in segments if "claim" in (s.get("utterance_types") or [])]
     if not candidates:
         return {}
 
     slots = dict(state.get("slots") or {})
-    empty_slots = [
-        name for name in ALL_SLOTS if not (slots.get(name) or {}).get("value")
-    ]
-    if not empty_slots:
-        return {}
+    empty_slots = [name for name in ALL_SLOTS if not (slots.get(name) or {}).get("value")]
 
-    # 세그먼트 힌트(segment의 target_slot)를 prior로 같이 넘긴다 — 슬롯 결정은 fill이
-    # 단일 권위로 하되, segment가 본 슬롯을 참고하게 해 두 판단이 갈리는 걸 줄인다.
-    # [직전 대화]는 kind 판정 (b)("어시스턴트가 방금 물은 슬롯에 직접 답했나")의 근거다.
     user_payload = (
         "[직전 대화]\n" + recent_history(state, n=4) + "\n\n"
         "[현재 슬롯]\n" + _slot_snapshot_lines(state) + "\n\n"
-        f"[비어있는 슬롯]\n{', '.join(empty_slots)}\n\n"
+        f"[비어있는 슬롯]\n{', '.join(empty_slots) or '없음'}\n\n"
         "[세그먼트]\n"
         + "\n".join(
             f"{i+1}. ({','.join(s.get('utterance_types') or [])}) "
-            f"[힌트:{s.get('target_slot') or '없음'}] "
             f"{s.get('canonical_text') or s.get('text','')}"
             for i, s in enumerate(candidates)
         )
@@ -237,7 +234,15 @@ async def extract_slot_fills_node(state: PlanState) -> dict:
     decided: set[str] = set()                            # 이번 턴에 쓰거나 큐에 넣은 슬롯
     commit_queued = False                                # 탐색 확인은 턴당 1건만(질문 폭주 방지)
 
-    def _queue(slot: str, candidate_slots: list[str], confirm_kind: str, value: str, reason: str) -> None:
+    def _tag_segment(slot: str) -> None:
+        # 근거→슬롯 연결용 — fill이 본 슬롯을 아직 태그 없는 claim 세그먼트에 순서대로 단다.
+        for seg in candidates:
+            if seg.get("target_slot") is None:
+                seg["target_slot"] = slot
+                return
+
+    def _queue(slot: str, candidate_slots: list[str], confirm_kind: str, value: str,
+               reason: str, previous_value: str = "", adequate: bool = True) -> None:
         # 주입하지 말고 사용자 확인 큐로(다음 턴 confirm_resolve가 해소).
         pending.append(
             {
@@ -248,6 +253,8 @@ async def extract_slot_fills_node(state: PlanState) -> dict:
                 "reason": reason,
                 "attempts": 0,
                 "confirm_kind": confirm_kind,
+                "previous_value": previous_value,
+                "adequate": adequate,
             }
         )
         queued.add(slot)
@@ -257,49 +264,65 @@ async def extract_slot_fills_node(state: PlanState) -> dict:
         value = (fill.value or "").strip()
         if not value or fill.slot not in valid:
             continue
+        slot = fill.slot
 
         # 직전에 물은 슬롯에 대한 답이면 결정으로 본다(짧은 명사구라도). LLM이 보수적으로
         # exploration을 줘도 결정론으로 승격해, 정상 슬롯 답변이 확인 질문으로 새는 걸 막는다.
-        kind = "decision" if fill.slot == last_asked else fill.kind
+        kind = "decision" if slot == last_asked else fill.kind
 
-        # 탐색 — 결정이 아니다. 슬롯에 바로 박지 않고, 채울 수 있는 빈 슬롯이면 확인 큐로
-        # (다음 턴 confirm_resolve가 "이거 X에 넣을까요?" 답으로 해소). 빈 슬롯 아니면 스킵.
+        # 값이 공허(슬롯 알맹이 미달, 또는 "명시되지 않음" 류 비-답) → 어느 경로로도 채우지 않는다.
+        # 확인 큐(commit/slot/replace)에도 안 올린다 — "이 비-값을 넣을까?"는 헛질문이라서다.
+        # 근거 태그만 남기고 비워둔다(다음 턴 ask_slot이 되묻는다).
+        if not fill.adequate:
+            _tag_segment(slot)
+            continue
+
+        # 이미 찬 슬롯 — 정정 마커 없이 '다른 값'으로 다시 정함 → 교체 확인(덮어쓰기는 확인 후에만).
+        if slot not in empty_set:
+            existing = ((slots.get(slot) or {}).get("value") or "").strip()
+            if (
+                kind == "decision"
+                and value != existing
+                and slot not in decided
+                and slot not in queued
+            ):
+                _tag_segment(slot)
+                _queue(slot, [slot], "replace", value, (fill.reason or "").strip(), existing)
+            continue
+
+        # 탐색 — 결정이 아니다. 채울 수 있는 빈 슬롯이면 commit 확인 큐로(턴당 1건).
         if kind != "decision":
-            if commit_queued or fill.slot not in empty_set:
+            if commit_queued or slot in decided or slot in queued:
                 continue
-            if fill.slot in decided or fill.slot in queued:
-                continue
-            _queue(fill.slot, [fill.slot], "commit", value, (fill.reason or "").strip())
+            _tag_segment(slot)
+            _queue(slot, [slot], "commit", value, (fill.reason or "").strip())
             commit_queued = True
             continue
 
         ambiguous = fill.confidence == "ambiguous" or bool(fill.alt_slots)
         if not ambiguous:
             # 결정 + 슬롯 명확 — 빈 슬롯이면 즉시 주입
-            if fill.slot not in empty_set or fill.slot in decided:
+            if slot in decided:
                 continue
-            slots[fill.slot] = {
+            slots[slot] = {
                 "value": value,
                 "source_label": SourceLabel.USER,
                 "status": "filled",
             }
-            empty_set.discard(fill.slot)
-            decided.add(fill.slot)
-            # 세그먼트에 target_slot 표시
-            for seg in candidates:
-                if seg.get("target_slot") is None:
-                    seg["target_slot"] = fill.slot
-                    break
+            empty_set.discard(slot)
+            decided.add(slot)
+            _tag_segment(slot)
             continue
 
         # 결정 + 슬롯 애매 — 어느 슬롯인지 확인 큐로
-        candidate_slots = [s for s in [fill.slot, *fill.alt_slots] if s in valid]
+        candidate_slots = [s for s in [slot, *fill.alt_slots] if s in valid]
         # 후보 중 채울 수 있는(빈) 슬롯이 하나도 없으면 물어봐야 의미 없음 → 스킵
         if not any(s in empty_set for s in candidate_slots):
             continue
-        if fill.slot in decided or fill.slot in queued:
+        if slot in decided or slot in queued:
             continue
-        _queue(fill.slot, candidate_slots, "slot", value, (fill.reason or "").strip())
+        _tag_segment(slot)
+        _queue(slot, candidate_slots, "slot", value, (fill.reason or "").strip())
 
     return {
         "slots": slots,

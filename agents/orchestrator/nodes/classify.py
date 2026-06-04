@@ -24,7 +24,12 @@ from __future__ import annotations
 from pydantic import BaseModel, Field
 
 from common.schema import PlanState
-from common.schema.state import Route, recent_history
+from common.schema.state import (
+    Route,
+    conversation_state_text,
+    recent_history,
+    slot_snapshot_text,
+)
 from agents.orchestrator.llm import call_json
 
 
@@ -35,6 +40,7 @@ _SYSTEM = """오케스트레이터 다중라벨 분류
 - meta: 단순 응답이나 진행 신호 (예: "응 다음", "ok", "좋아")
 - recall: 직전 대화에 이미 나온 내용을 다시 묻거나 확인하는 되묻기 ([최근 대화]에 있는 걸 되묻는 경우. 예: "아까 일본 된다며?", "방금 뭐랬지?", "우리 타겟 뭐로 정했지?")
 - tool_help: 이 도구·슬롯·사용법 자체를 묻는 메타질문 (사업 내용이 아니라 '이 도구가 어떻게 동작하나'를 묻는다. 예: "솔루션 슬롯이 뭐야?", "슬롯이 뭔데?", "이거 어떻게 쓰는 거야?", "넌 뭐 할 수 있어?", "왜 자꾸 물어봐?")
+- reason: 이미 모았거나 대화에서 논의된 내용을 바탕으로 결론·문제점·시사점을 추론·도출·종합해달라는 요청 (새 외부 정보 탐색이 아니라 '가진 것'을 종합. 예: "여기서 문제점 추론해봐", "방금 분석에서 도출할 만한 게 뭐야?", "위 내용 종합해줘", "이걸로 시사점 정리해줘"). 사용자가 어시스턴트에게 직접 의견·판단·제안·결정을 청하는 발화도 reason이다 (예: "네가 생각하는 문제는 뭐야?", "넌 어떻게 봐?", "네 생각엔?", "추천해줘", "정해줘", "제안해봐") — 새 외부정보를 물은 게 아니라 '가진 것으로 종합해 제안'하라는 요청이다.
 
 내용(content) — 검증·명확화·정정·정보탐색이 필요하다:
 - clarification_needed: 모호하거나 추상적이라 추가 질문이 필요함
@@ -42,15 +48,20 @@ _SYSTEM = """오케스트레이터 다중라벨 분류
 - correction: 정정이나 취소 (예: "아니, 빼자")
 - question: 대화에 없던 새 정보를 물어봄 (예: "웹툰 시장 규모가 어떻게 돼?")
 
-여러 유형이 한 세그먼트에 동시에 해당할 수 있다 — 예: "시장 규모 어때? 타겟은 네이버로 가자" 같은 한 문장이면 question+claim. 단, recall·meta·tool_help는 단독으로 둔다(되묻기·진행신호·도구질문은 그 자체가 발화의 핵심).
+여러 유형이 한 세그먼트에 동시에 해당할 수 있다 — 예: "시장 규모 어때? 타겟은 네이버로 가자" 같은 한 문장이면 question+claim. 단, recall·meta·tool_help·reason은 단독으로 둔다(되묻기·진행신호·도구질문·추론요청은 그 자체가 발화의 핵심).
+
+[대화 상태]·[현재 슬롯]을 함께 본다 — 이번 발화가 '직전에 시스템이 물은 것에 대한 답'인지부터 가린다:
+- 열린 제안에 대한 답: [대화 상태]에 확인 대기가 있고, 어떤 세그먼트가 그 제안에 대한 답이면(수락 "이대로 넣어"/"응", 거부 "빼"/"아니", 슬롯 선택 "솔루션에 넣어") meta로 둔다 — 새 주장이 아니라 확인 응답이라 워커를 부르지 않는다. 그 답에 딸린 새 내용("응 넣고, 타겟은 20대야"의 "타겟은 20대")은 별개 세그먼트로 평소대로 분류한다.
+- 직전 질문 슬롯에 대한 답: [대화 상태]에 직전 질문 슬롯이 있고 짧은 답(고유명사·수치·짧은 구)이 오면, 짧다는 이유로 clarification_needed로 떨구지 말고 claim으로 둔다(그 슬롯을 채울 답이다). 단 그 슬롯 기준에 비해 내용이 공허하면 아래대로 clarification_needed.
 
 구분 가이드 — 헷갈리는 경계:
 - recall vs question: 이미 [최근 대화]에 나온 걸 다시 확인하면 recall(대화 이력에서 답함), 대화에 없는 새 정보를 물으면 question(리서치·RAG로 답함). 애매하면 question.
+- reason vs question/claim: 이미 모은/논의된 내용("여기서/방금/위 내용에서/이걸로")에서 추론·도출·종합을 요청하면 reason(워커 없이 conversation이 누적 근거로 답). 대화에 없던 새 외부 정보를 물으면 question, 검증할 새 주장을 내면 claim. 단서가 기존 맥락 지시('여기서·방금·위·이걸로')면 reason, 새 대상이면 question/claim. 어시스턴트에게 판단·의견·제안을 청하는 발화('네가/네 생각엔/추천해줘/정해줘/제안해봐')도 reason이다 — 맥락 지시어가 없어도 '가진 것으로 종합해 제안하라'는 뜻이지, 새 외부 사실을 물은 게 아니다. 단, 대화에 없던 새 외부 대상의 사실을 물으면 question. 그 외 애매하면 question.
 - tool_help vs question/claim: 이 '도구·슬롯' 자체를 묻는 메타질문이면 tool_help, 사업 '내용'을 묻거나 정하면 question·claim. 슬롯 이름이 들어가도 '그 칸이 뭐냐(도구 설명)'면 tool_help, '그 칸에 뭘 넣을까(내용)'면 question·claim.
   · "솔루션 슬롯이 뭐하는 칸이야?" → tool_help (도구 설명을 물음)
   · "우리 솔루션 뭐로 하지?" / "솔루션은 B2B 감수 서비스로 가자" → question·claim (사업 내용)
   · "웹툰 시장 규모 어때?" → question (외부 사실)
-- claim: 참/거짓이나 적합성을 따질 수 있으면 가치판단이라도 claim이다. 근거가 붙은 선호("B2B가 우리 색깔에 맞아, 영업 인프라도 강하니까")도 claim — 그 근거를 RAG·논리검증이 따진다. 단, 검증할 전제 없이 막연한 답변("월 매출 잘 나오게", "그냥 B2B가 끌려")은 claim이 아니라 clarification_needed로 우선 라벨.
+- claim: 참/거짓이나 적합성을 따질 수 있으면 가치판단이라도 claim이다. 근거가 붙은 선호("B2B가 우리 색깔에 맞아, 영업 인프라도 강하니까")도 claim — 그 근거를 RAG·논리검증이 따진다. 단, 검증할 전제 없이 막연·공허한 답변은 claim이 아니라 clarification_needed로 우선 라벨한다(검증할 내용이 없으니 리서치 대신 되묻는다). 슬롯을 정하는 답인데 그 슬롯이 요구하는 알맹이가 비면 막연한 답이다 — 예: 목표 자리에 "결과물"/"잘 됐으면"(수치·기한 없음), 타겟 자리에 "사람들"/"누구나"(구체 대상 없음), "월 매출 잘 나오게"/"그냥 B2B가 끌려".
   · "B2B 시장이 더 커" → claim (시장 규모는 외부 사실)
   · "타겟은 네이버로 가자" → claim (결정 = 향후 슬롯에 박히는 약속)
 - correction은 '이전에 정한 것을 무르거나 바꿀 때'만. 정정 키워드가 있어도 새 진술이면 claim:
@@ -104,6 +115,7 @@ _ROUTE_MATRIX: dict[str, set[Route]] = {
     "meta": set(),
     "recall": set(),  # 되묻기 — 워커 없이 conversation이 대화 이력에서 답
     "tool_help": set(),  # 도구/슬롯 메타질문 — 워커 없이 conversation이 SLOT_SPECS·APP_OVERVIEW에서 답
+    "reason": set(),  # 추론·도출·종합 — 워커 없이 conversation이 누적 근거(session_evidence)+대화이력에서 직접 추론
 }
 
 
@@ -111,7 +123,7 @@ _VALID_TYPES: set[str] = set(_ROUTE_MATRIX.keys())
 
 # interaction 유형 — 워커를 부르지 않고 conversation이 직접 받는다. content 라벨과 한 세그먼트에
 # 섞이면 content를 덮어 routes를 ["none"]으로 만든다(classify_node의 interaction-precedence 가드).
-_INTERACTION_TYPES: set[str] = {"meta", "recall", "tool_help"}
+_INTERACTION_TYPES: set[str] = {"meta", "recall", "tool_help", "reason"}
 
 
 def derive_routes(utterance_types: list[str]) -> list[Route]:
@@ -139,8 +151,15 @@ async def classify_node(state: PlanState) -> dict:
 
     texts = [s.get("canonical_text") or s.get("text", "") for s in segments]
     seg_list = "\n".join(f"{i+1}. {t}" for i, t in enumerate(texts))
-    # 되묻기(recall) 판정에 직전 대화가 필요하다 — 같은 LLM 호출, 프롬프트만 풍부해짐.
-    payload = f"[최근 대화]\n{recent_history(state)}\n\n[세그먼트]\n{seg_list}"
+    # 되묻기·확인응답·충돌·충분성 판정에 대화 상태·슬롯 값·직전 대화가 필요하다 —
+    # 같은 LLM 호출, 프롬프트만 풍부해진다(라우팅은 derive_routes가 그대로 코드로 정함).
+    state_block = conversation_state_text(state)
+    payload = (
+        (f"{state_block}\n\n" if state_block else "")
+        + f"[현재 슬롯]\n{slot_snapshot_text(state)}\n\n"
+        f"[최근 대화]\n{recent_history(state)}\n\n"
+        f"[세그먼트]\n{seg_list}"
+    )
 
     out = await call_json(_SYSTEM, payload, ClassifyOut)
 
