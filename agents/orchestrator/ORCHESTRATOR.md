@@ -203,30 +203,31 @@ dispatch 경로에서만 실행 (그래프상 dispatch 다음). **비어있는 �
 research → run_research(subject) → report              # asyncio.as_completed; report를 idx로 보관
 rag      → run_rag_check(subject) → (report, rag_result)
 #   완료 즉시 emit(validation_report); 반환 리스트는 디스패치 순서로 재구성(결정론)
-# 2단계: 논리검증 — 1단계 전체 완료 뒤(배리어), 같은 세그먼트의 RAG 산출물 + (claim이면) research report를 입력으로
-logic_validator → run_logic_validator(subject, rag_result, research_report)   # asyncio.as_completed
+# 2단계: 논리검증 — 1단계 전체 완료 뒤(배리어), 같은 세그먼트의 RAG 산출물이 있는 타깃만
+logic_validator → run_logic_validator(subject, rag_result)   # rag_result 있을 때만 호출; asyncio.as_completed
 ```
 > **왜 2단계인가** — `logic_validator`(validator 엔진)는 RAG가 회수한 근거(highlight·raw_source)가
 > claim을 논리적으로 지지하는지 판정하므로, 1단계 RAG 산출물 `RagExtractorResult`가 먼저 있어야
 > 한다. RAG는 `(ValidationReport, RagExtractorResult)`를 돌려주고 dispatch가 그 원본을 2단계로
 > 넘긴다(프론트엔 ValidationReport만 발행 — 단 사내 원문은 `report.citations`의 `raw_source`로 전달).
-> 매트릭스상 logic_validator는 claim에서 rag와 동반하지만, `evidence_mode`로 rag를 끄거나 RAG가
-> 근거를 못 찾으면(`rag_result=None`) research 리포트만으로, 둘 다 없으면 "근거 없음"으로 흐른다.
+> 매트릭스상 logic_validator는 claim에서 rag와 동반하지만 **RAG 전용 판정**이다 — `evidence_mode`로
+> rag를 끄거나(research 전용) RAG가 근거를 못 찾으면 `rag_result`가 없어 2단계에서 **제외**된다
+> (불필요한 "근거 없음" 카드를 만들지 않는다). 외부 리서치 근거판단은 research 워커가 자체 agreement로 따로 낸다.
 >
 > **`evidence_mode` 토글(both/research/rag)** — 사용자가 프론트에서 고른 근거 출처 범위를 `run_turn`이
 > state에 싣고, 1단계에서 `research`/`rag` 디스패치를 이걸로 거른다(`both`=둘 다, `research`=웹만,
 > `rag`=사내문서만). `derive_routes`(classify)는 순수하게 두고 **디스패치 단계에서만** 거르며,
-> `logic_validator`는 토글과 무관하게 claim이면 항상 돈다(가능한 근거로 판정). 최소 한쪽은 늘 켜진다.
+> `logic_validator`는 같은 idx의 `rag_result` 유무를 따라간다(research 전용이면 RAG가 없어 자연히 안 돈다). 최소 한쪽은 늘 켜진다.
 >
 > **발행은 완료순, 반환은 디스패치순** — 1단계는 `asyncio.as_completed`로 먼저 끝난 워커(웹/사내문서)의
 > 결과 카드부터 발행해 사용자가 둘 다 끝나길 기다리지 않게 한다. 다만 `turn_validation_reports`·
 > `turn_evidence`는 등장 순서로 되돌려 다운스트림을 결정론으로 유지한다(`session_evidence` 누적은
 > `(subject,cluster)` 중복 제거라 순서 무관).
 >
-> **research 보조 근거 통합**: claim 세그먼트에선 같은 세그먼트의 1단계 research 결과(findings·sources)를
-> 텍스트로 묶어 보조 근거로 함께 넘긴다. validator는 `research_evidence`(Optional[str]) 인자로 하위호환
-> 확장돼 — 인자 없으면 user_msg가 기존과 바이트 동일 — **사내 RAG 근거를 1차, 외부 research를 보조**로
-> 본다. (logic_validator는 claim에서만 발동하고 claim은 항상 research를 함께 타므로 보조 근거가 늘 따라온다; research가 비면 `research_report=None` 폴백.)
+> **두 근거판단 분리**: RAG 근거판단과 외부 리서치 근거판단을 따로 낸다. `logic_validator`는 **사내 RAG 근거만**
+> 판정하고(research를 섞지 않음), 외부 리서치의 근거판단은 research 워커가 자체 `agreement`로 1단계에서 따로
+> 낸다(각각 별도 카드). validator 엔진(`run_validator`)은 `research_evidence`(Optional[str]) 인자를 그대로
+> 두되 dispatch는 더 이상 채우지 않는다(항상 `None`).
 >
 > **역할 분담**: `rag`는 retrieval만(`agreement=unknown`), `logic_validator`는 판정만
 > (verdict→agreement: supports→confirms / contradicts→contradicts / insufficient→partial /

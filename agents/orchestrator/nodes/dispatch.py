@@ -8,13 +8,15 @@ spec v0.7.5: "검증" 단계는 사라지고 logic_validator·리서치·RAG 호
           RAG는 회수 결과(ValidationReport)와 함께 원본 RagExtractorResult를 돌려준다.
   2단계 — logic_validator는 1단계 전체 완료 뒤 시작(배리어)하며, 같은 세그먼트의 1단계 RAG
           산출물(RagExtractorResult)을 입력으로 받아 claim ↔ 사내 근거의 논리적 지지 여부
-          (verdict→agreement)를 판정한다.
-라우트 매트릭스상 logic_validator는 claim에서 rag와 동반하지만, 사용자가 evidence_mode로
-rag를 끄거나(research 전용) RAG가 근거를 못 찾으면 rag_result=None이 된다 — 그때는 research
-리포트만으로, 둘 다 없으면 '근거 없음'으로 판정이 흐른다(logic_validator는 None을 허용한다).
+          (verdict→agreement)를 판정한다. 사내 RAG 근거만 판정한다 — 외부 리서치 판단은 분리한다.
+RAG 근거판단과 외부 리서치 근거판단은 분리해 출력한다. logic_validator는 RAG 전용이라 같은 idx의
+rag_result가 있을 때만 부른다 — research 전용 모드나 RAG가 근거를 못 찾은 세그먼트는 2단계에서
+제외해 '근거 없음' 카드를 만들지 않는다. 외부 리서치의 근거판단은 research 워커가 자체
+agreement(ValidationReport.cluster="research")로 1단계에서 따로 낸다.
 
 evidence_mode(both/research/rag): 1단계에서 research/rag 디스패치를 거르는 사용자 토글.
-both=둘 다, research=웹만, rag=사내문서만. logic_validator는 끄지 않는다(claim이면 항상 돈다).
+both=둘 다, research=웹만, rag=사내문서만. logic_validator는 rag_result 유무로 따라간다
+(research 전용이면 RAG가 없어 자연히 안 돈다).
 """
 from __future__ import annotations
 
@@ -128,9 +130,7 @@ async def parallel_dispatch_workers_node(state: PlanState) -> dict:
     # 완료 순으로 결과 카드를 즉시 발행 — 먼저 끝난 워커(웹/사내문서)가 먼저 보인다.
     # RAG는 (report, rag_result) 튜플 → rag_result는 2단계 logic_validator 입력으로만 쓰고
     # 프론트엔 안 보낸다(사내 원문은 report.citations의 snippet/raw_source로 별도 전달).
-    # research report도 idx로 보관해 2단계 logic_validator에 보조 근거로 넘긴다(claim 라우트일 때만).
     rag_result_by_idx: dict[int, "RagExtractorResult"] = {}
-    research_report_by_idx: dict[int, ValidationReport] = {}
     report_by_spec: dict[tuple[int, str], ValidationReport] = {}
     for coro in asyncio.as_completed(fact_tasks):
         idx, route, res = await coro
@@ -140,7 +140,6 @@ async def parallel_dispatch_workers_node(state: PlanState) -> dict:
                 rag_result_by_idx[idx] = rag_result
         else:  # route == "research"
             report = res
-            research_report_by_idx[idx] = report
         report_by_spec[(idx, route)] = report
         emit({"type": "validation_report", **report})
 
@@ -154,20 +153,16 @@ async def parallel_dispatch_workers_node(state: PlanState) -> dict:
         report_idx.append((report, idx))
 
     # --- 2단계: 논리검증 (1단계 RAG 산출물을 입력으로) ---
-    # 2단계는 1단계 전체 완료 뒤 시작(배리어 유지) — lv는 같은 idx의 RAG·리서치 산출물이 필요.
+    # 2단계는 1단계 전체 완료 뒤 시작(배리어 유지) — lv는 같은 idx의 RAG 산출물이 필요.
+    # RAG 근거가 있는 타깃만 부른다 — research 전용 모드나 RAG가 못 찾은 세그먼트(rag_result 없음)는
+    # 제외해 '근거 없음' 카드를 만들지 않는다. 외부 리서치 근거판단은 research 워커가 자체 agreement로 따로 낸다.
     # lv가 여럿이면 1단계처럼 완료순으로 발행하고, 반환은 lv_idx(디스패치) 순서로 되돌린다.
     lv_coros = []
     lv_idx: list[int] = []  # lv 리포트가 어느 타깃(→슬롯)에서 나왔는지
     for idx, (subject, routes, _label, _slot) in enumerate(targets):
-        if "logic_validator" in routes:
+        if "logic_validator" in routes and rag_result_by_idx.get(idx) is not None:
             emit({"type": "agent_start", "cluster": "logic_validator", "subject": subject[:80]})
-            lv_coros.append(
-                run_logic_validator(
-                    subject,
-                    rag_result_by_idx.get(idx),
-                    research_report_by_idx.get(idx),
-                )
-            )
+            lv_coros.append(run_logic_validator(subject, rag_result_by_idx.get(idx)))
             lv_idx.append(idx)
     if lv_coros:
         lv_tasks = [
