@@ -86,6 +86,37 @@ def test_conversation_guard_replaces_degenerate_with_findings(monkeypatch):
     assert "1.8조" in out["pending_question"]
 
 
+def test_conversation_reason_fallback_renders_context(monkeypatch):
+    # reason_over_context도 퇴화 출력이 새면 누적 근거(context)로 결정론 대체된다.
+    async def fake_call_json(system, user, schema, *, reasoning_effort=None):
+        return ConversationOut(message="ACK")  # 회귀 증상 그대로
+
+    monkeypatch.setattr("agents.conversation.agent.call_json", fake_call_json)
+    state = initial_state()
+    state["turn"] = 1
+    state["turn_segments"] = [{
+        "text": "여기서 문제점 추론해봐",
+        "canonical_text": "여기서 문제점 추론해봐",
+        "utterance_types": ["reason"],
+        "in_scope": True,
+        "target_slot": None,
+        "routes": ["none"],
+    }]
+    state["session_evidence"] = [{
+        "subject": "국내 커피 시장 수익성",
+        "cluster": "research",
+        "findings": ["점포 포화로 가맹점 매출 감소"],
+        "agreement": "confirms",
+        "citations": [],
+        "target_slot": None,
+        "turn": 1,
+    }]
+    out = asyncio.run(conversation_node(state))
+
+    assert out["pending_question"] != "ACK"
+    assert "가맹점 매출 감소" in out["pending_question"]
+
+
 def test_conversation_guard_passes_normal_short_reply(monkeypatch):
     async def fake_call_json(system, user, schema, *, reasoning_effort=None):
         return ConversationOut(message="좋아, 그렇게 둘게.")

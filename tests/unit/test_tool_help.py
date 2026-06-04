@@ -116,3 +116,65 @@ def test_classify_tool_help_plus_claim_guard(monkeypatch):
     seg = _run_classify(["tool_help", "claim"], monkeypatch)
     assert seg["routes"] == ["none"]
     assert seg["utterance_types"] == ["tool_help"]
+
+
+# ---- reason(추론·도출·종합) — 워커 없이 conversation이 누적 근거로 답 ---------
+
+def _evidence(subject, findings, *, cluster="research", agreement="confirms"):
+    return {
+        "subject": subject,
+        "cluster": cluster,
+        "findings": findings,
+        "agreement": agreement,
+        "citations": [],
+        "target_slot": None,
+        "turn": 1,
+    }
+
+
+def test_classify_reason_no_workers(monkeypatch):
+    seg = _run_classify(["reason"], monkeypatch)
+    assert seg["routes"] == ["none"]  # 추론 요청은 워커를 안 부른다
+    assert seg["utterance_types"] == ["reason"]
+
+
+def test_classify_reason_plus_claim_guard(monkeypatch):
+    # 추론 요청이 claim과 섞여도 interaction-precedence가 content를 떨궈 워커가 안 새야 한다
+    # (원래 misfire 재발점: reason을 그대로 리서치 쿼리로 디스패치하던 회귀)
+    seg = _run_classify(["reason", "claim"], monkeypatch)
+    assert seg["routes"] == ["none"]
+    assert seg["utterance_types"] == ["reason"]
+
+
+def test_reason_over_context_intent_built():
+    st = _state(_seg("여기서 문제점 추론해봐", ["reason"]))
+    st["session_evidence"] = [
+        _evidence("국내 커피 시장 수익성", ["점포 포화로 가맹점 매출 감소", "원두·인건비 상승"])
+    ]
+    intents = _build_intents(st)
+    types = [i["type"] for i in intents]
+    ro = next(i for i in intents if i["type"] == "reason_over_context")
+    assert ro["subject"] == "여기서 문제점 추론해봐"
+    # 누적 근거가 context에 추론 재료로 실려야 한다
+    findings = [f for c in ro["context"] for f in c["findings"]]
+    assert "원두·인건비 상승" in findings
+    assert "ask_slot" not in types  # 추론 답이 곧 응답 — 다음 슬롯 질문 보류
+
+
+def test_reason_over_context_empty_evidence():
+    # 모아둔 근거가 없어도 intent는 뜬다(빈 context) — conversation이 솔직히 답하게 한다.
+    st = _state(_seg("여기서 문제점 추론해봐", ["reason"]))
+    st["session_evidence"] = []
+    intents = _build_intents(st)
+    types = [i["type"] for i in intents]
+    ro = next(i for i in intents if i["type"] == "reason_over_context")
+    assert ro["context"] == []
+    assert "ask_slot" not in types
+
+
+def test_reason_beats_redirect_when_offscope():
+    # in_scope=false로 잘못 매겨져도 redirect 대신 추론으로 답한다(explain_tool과 같은 방어)
+    intents = _build_intents(_state(_seg("여기서 문제점 추론해봐", ["reason"], in_scope=False)))
+    types = [i["type"] for i in intents]
+    assert "reason_over_context" in types
+    assert "redirect" not in types

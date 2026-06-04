@@ -35,6 +35,7 @@ _SYSTEM = """오케스트레이터 다중라벨 분류
 - meta: 단순 응답이나 진행 신호 (예: "응 다음", "ok", "좋아")
 - recall: 직전 대화에 이미 나온 내용을 다시 묻거나 확인하는 되묻기 ([최근 대화]에 있는 걸 되묻는 경우. 예: "아까 일본 된다며?", "방금 뭐랬지?", "우리 타겟 뭐로 정했지?")
 - tool_help: 이 도구·슬롯·사용법 자체를 묻는 메타질문 (사업 내용이 아니라 '이 도구가 어떻게 동작하나'를 묻는다. 예: "솔루션 슬롯이 뭐야?", "슬롯이 뭔데?", "이거 어떻게 쓰는 거야?", "넌 뭐 할 수 있어?", "왜 자꾸 물어봐?")
+- reason: 이미 모았거나 대화에서 논의된 내용을 바탕으로 결론·문제점·시사점을 추론·도출·종합해달라는 요청 (새 외부 정보 탐색이 아니라 '가진 것'을 종합. 예: "여기서 문제점 추론해봐", "방금 분석에서 도출할 만한 게 뭐야?", "위 내용 종합해줘", "이걸로 시사점 정리해줘")
 
 내용(content) — 검증·명확화·정정·정보탐색이 필요하다:
 - clarification_needed: 모호하거나 추상적이라 추가 질문이 필요함
@@ -42,10 +43,11 @@ _SYSTEM = """오케스트레이터 다중라벨 분류
 - correction: 정정이나 취소 (예: "아니, 빼자")
 - question: 대화에 없던 새 정보를 물어봄 (예: "웹툰 시장 규모가 어떻게 돼?")
 
-여러 유형이 한 세그먼트에 동시에 해당할 수 있다 — 예: "시장 규모 어때? 타겟은 네이버로 가자" 같은 한 문장이면 question+claim. 단, recall·meta·tool_help는 단독으로 둔다(되묻기·진행신호·도구질문은 그 자체가 발화의 핵심).
+여러 유형이 한 세그먼트에 동시에 해당할 수 있다 — 예: "시장 규모 어때? 타겟은 네이버로 가자" 같은 한 문장이면 question+claim. 단, recall·meta·tool_help·reason은 단독으로 둔다(되묻기·진행신호·도구질문·추론요청은 그 자체가 발화의 핵심).
 
 구분 가이드 — 헷갈리는 경계:
 - recall vs question: 이미 [최근 대화]에 나온 걸 다시 확인하면 recall(대화 이력에서 답함), 대화에 없는 새 정보를 물으면 question(리서치·RAG로 답함). 애매하면 question.
+- reason vs question/claim: 이미 모은/논의된 내용("여기서/방금/위 내용에서/이걸로")에서 추론·도출·종합을 요청하면 reason(워커 없이 conversation이 누적 근거로 답). 대화에 없던 새 외부 정보를 물으면 question, 검증할 새 주장을 내면 claim. 단서가 기존 맥락 지시('여기서·방금·위·이걸로')면 reason, 새 대상이면 question/claim. 애매하면 question.
 - tool_help vs question/claim: 이 '도구·슬롯' 자체를 묻는 메타질문이면 tool_help, 사업 '내용'을 묻거나 정하면 question·claim. 슬롯 이름이 들어가도 '그 칸이 뭐냐(도구 설명)'면 tool_help, '그 칸에 뭘 넣을까(내용)'면 question·claim.
   · "솔루션 슬롯이 뭐하는 칸이야?" → tool_help (도구 설명을 물음)
   · "우리 솔루션 뭐로 하지?" / "솔루션은 B2B 감수 서비스로 가자" → question·claim (사업 내용)
@@ -104,6 +106,7 @@ _ROUTE_MATRIX: dict[str, set[Route]] = {
     "meta": set(),
     "recall": set(),  # 되묻기 — 워커 없이 conversation이 대화 이력에서 답
     "tool_help": set(),  # 도구/슬롯 메타질문 — 워커 없이 conversation이 SLOT_SPECS·APP_OVERVIEW에서 답
+    "reason": set(),  # 추론·도출·종합 — 워커 없이 conversation이 누적 근거(session_evidence)+대화이력에서 직접 추론
 }
 
 
@@ -111,7 +114,7 @@ _VALID_TYPES: set[str] = set(_ROUTE_MATRIX.keys())
 
 # interaction 유형 — 워커를 부르지 않고 conversation이 직접 받는다. content 라벨과 한 세그먼트에
 # 섞이면 content를 덮어 routes를 ["none"]으로 만든다(classify_node의 interaction-precedence 가드).
-_INTERACTION_TYPES: set[str] = {"meta", "recall", "tool_help"}
+_INTERACTION_TYPES: set[str] = {"meta", "recall", "tool_help", "reason"}
 
 
 def derive_routes(utterance_types: list[str]) -> list[Route]:

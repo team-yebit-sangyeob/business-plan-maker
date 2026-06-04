@@ -194,6 +194,7 @@ UtteranceType = Literal[
     "meta",                  # 단순응답·진행 신호. 예: "응 다음", "그래 그거"
     "recall",                # 되묻기 — 직전 대화를 다시 묻거나 확인 → conversation이 대화 이력에서 답. 예: "아까 일본 된다며?"
     "tool_help",             # 도구/슬롯/사용법 메타질문 → conversation이 SLOT_SPECS·APP_OVERVIEW에서 답(워커 없음). 예: "솔루션 슬롯이 뭐야?", "넌 뭐 할 수 있어?"
+    "reason",                # 추론·도출·종합 — 이미 모은/논의된 내용에서 결론·문제점·시사점을 추론 → conversation이 누적 근거(session_evidence)+대화이력으로 직접 종합(워커 없음). 예: "여기서 문제점 추론해봐"
 ]
 
 

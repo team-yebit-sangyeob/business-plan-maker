@@ -11,6 +11,7 @@ state에서 결정론으로 뽑고(_build_intents), 그 intent 목록을 LLM 1�
   answer_question  — 사용자 질문에 리서치·RAG가 찾은 답 전달(질문은 논리검증 미경유)
   recall           — 되묻기: 직전 대화 내용을 대화 이력에서 찾아 답(워커·검색 없이)
   explain_tool     — 도구/슬롯/사용법 메타질문에 SLOT_SPECS·APP_OVERVIEW로 답(워커·검색 없이)
+  reason_over_context — 추론·도출·종합: 이미 모은 근거(session_evidence)와 대화 이력에서 직접 추론해 답(워커·검색 없이)
   redirect         — 스코프 밖 발화를 부드럽게 되돌림
   acknowledge      — 정정 반영 확인
   deliver_plan     — 슬롯이 전부 차서 계획서 준비 완료 안내(ready). 생성은 '계획서 생성' 버튼(POST /plan)
@@ -48,7 +49,7 @@ _SYSTEM = """대화 에이전트
 - 문체: 친근한 반말~부드러운 존댓말 혼용, 사업 파트너 톤. 짧은 대화나 한 가지만 말할 때는 한두 문장 평문으로 둔다.
 - 포맷: 한 응답에 여러 부분이 섞이거나(예: 찾은 근거 보고 + 다음 질문) 나열할 항목이 둘 이상이면, 줄바꿈으로 부분을 나누고 항목은 "- " 불릿으로 정리한다. 강조는 **굵게**를 쓸 수 있다(마크다운으로 렌더된다). 항목이 하나거나 짧은 답이면 불릿 없이 평문으로 둔다.
 - 여러 intent가 오면 매끄럽게 연결한다(예: 정정 확인 → 찾은 근거 → 다음 질문).
-- 입력의 recent_messages는 최근 대화 이력이다 — recall intent를 답할 때만 근거로 쓰고, 다른 intent엔 끌어들이지 않는다.
+- 입력의 recent_messages는 최근 대화 이력이다 — recall·reason_over_context intent를 답할 때만 근거로 쓰고, 다른 intent엔 끌어들이지 않는다.
 
 [intent별 표현 규칙]
   - acknowledge: 사용자의 정정이나 확인을 짧게 받아준다.
@@ -56,6 +57,7 @@ _SYSTEM = """대화 에이전트
   - answer_question: 사용자가 물은 것에 research·rag가 찾은 답(findings)을 1~3문장으로 직접 전한다 — 질문에 대한 답이 본문이 되게 핵심을 풀어 쓴다. findings가 비어 있으면 솔직히 못 찾았다고 하고 본론으로 잇는다.
   - recall: 사용자가 직전 대화에 나온 내용을 되묻거나 확인하는 발화. recent_messages(최근 대화 이력)에서 찾아 간결하고 직접적으로 답한다(새 검색·워커 없이). 이력에 없으면 솔직히 모른다고 하고 부드럽게 잇는다.
   - explain_tool: 사용자가 이 도구·슬롯·사용법을 물었다(subject). 주어진 body(도구 설명 + 슬롯 정의 전부)를 참고해 subject가 묻는 만큼만 친근하게 답한다(새 검색·워커 없이, recent_messages도 안 씀). 특정 슬롯 하나를 물으면 그 슬롯만 한두 문장으로, 여러·모든 슬롯을 물으면 해당 슬롯들을 "- 제목: 역할" 불릿으로 빠짐없이, 도구 전반을 물으면 개요로 답한다. body에 없는 내용은 지어내지 않는다. 답한 뒤 한 문장으로 본론(계획 채우기)으로 가볍게 잇는다.
+  - reason_over_context: 사용자가 이미 모은 근거·대화 내용에서 결론·문제점·시사점을 추론·도출·종합해달라고 했다(subject). 주어진 context(누적 근거: subject·cluster·agreement·findings)와 recent_messages를 근거로 직접 추론해 핵심을 1~5문장으로 정리해 전한다(새 검색·워커 없이). 가진 근거 범위에서만 추론하고 없는 사실은 지어내지 않는다. 항목이 여럿이면 "- " 불릿으로 정리한다. context가 비어 있으면 아직 모아둔 근거가 없다고 솔직히 말하고, 무엇을 먼저 찾아보면 좋을지 한 문장으로 제안한다.
   - clarify: 모호한 발화를 좁히는 질문을 한다(이게 있으면 보통 ask_slot은 보류된다).
   - redirect: 스코프 밖 발화를 부드럽게 넘기고 본론으로 잇는다.
   - deliver_plan: 슬롯이 모두 채워져 계획서를 만들 준비가 됐다고 알린다(생성은 화면의 '계획서 생성' 버튼).
@@ -70,6 +72,9 @@ _SYSTEM = """대화 에이전트
 
 입력 intents: [{"type":"recall","subject":"내가 방금 뭐라고 했지"}]
 좋은 응답: 방금 타겟을 20대 직장인으로 잡는다고 했어.
+
+입력 intents: [{"type":"reason_over_context","subject":"여기서 도출할 문제점을 추론해줘","context":[{"subject":"국내 커피 시장 수익성","cluster":"research","agreement":"confirms","findings":["점포 포화로 가맹점 매출 감소","원두·인건비 상승"]}]}]
+좋은 응답: 모은 내용을 종합하면 — 국내 커피 시장은 점포 포화와 원두·인건비 상승이 겹쳐 가맹점 수익성이 떨어지고 있어서, 단순 출점 확대보다 운영 효율화·차별화가 핵심 과제로 보여.
 
 반드시 {"message": "..."} JSON만 출력하고, message는 위 규칙대로 intent 내용을 실제로 담은 비어있지 않은 문자열이어야 한다."""
 
@@ -132,6 +137,33 @@ def _build_intents(state: PlanState) -> list[dict]:
         intents.append({"type": "explain_tool", "subject": subj, "body": tool_help_text()})
         suppress_ask = True  # 도구 설명이 곧 응답 — 다음 슬롯 질문은 보류
 
+    # 1.4) reason_over_context — 추론·도출·종합: 워커 없이 conversation이 누적 근거에서 직접 추론.
+    # recall(대화 이력)·explain_tool(슬롯 정의)과 같은 '재료로 답하는' interaction이지만, 재료가
+    # session_evidence(턴을 넘어 모은 research·rag·논리검증 findings)다. explain_tool이 body를 싣듯
+    # 재료를 intent에 실어 넘긴다(payload 계약 유지). in_scope 필터는 두지 않는다 — off-scope로
+    # 잘못 매겨져도 답한다(아래 redirect가 reason 세그먼트를 건너뛴다).
+    reasons = [
+        (seg.get("canonical_text") or seg.get("text", "")).strip()
+        for seg in segments
+        if "reason" in (seg.get("utterance_types") or [])
+    ]
+    reasons = [r for r in reasons if r]
+    if reasons:
+        evidence = state.get("session_evidence") or []
+        context = [
+            {
+                "subject": r.get("subject", ""),
+                "cluster": r.get("cluster", ""),
+                "agreement": r.get("agreement", "unknown"),
+                "findings": r.get("findings") or [],
+            }
+            for r in evidence[-15:]  # 누적 근거는 (subject,cluster) 중복제거라 보통 작다 — 최근분만 상한
+            if r.get("findings")
+        ]
+        for subj in reasons:
+            intents.append({"type": "reason_over_context", "subject": subj, "context": context})
+            suppress_ask = True  # 추론 답이 곧 응답 — 다음 슬롯 질문은 보류
+
     # 1.5) confirm_slot — 애매해서 보류된 주입(있으면 다음 슬롯 질문은 보류)
     pending = state.get("pending_confirmations") or []
     pending_item = pending[0] if pending else None
@@ -156,6 +188,7 @@ def _build_intents(state: PlanState) -> list[dict]:
             for seg in segments
             if seg.get("in_scope") is False
             and "tool_help" not in (seg.get("utterance_types") or [])
+            and "reason" not in (seg.get("utterance_types") or [])
         ),
         None,
     )
@@ -283,6 +316,15 @@ def _fallback_message(intents: list[dict]) -> str:
             text = (it.get("text") or "").strip()
             if text:
                 parts.append(text)
+        elif t == "reason_over_context":
+            ctx = it.get("context") or []
+            findings = [
+                f for r in ctx for f in (r.get("findings") or []) if (f or "").strip()
+            ]
+            if findings:
+                parts.append("모은 내용을 정리하면:\n" + "\n".join(f"- {f}" for f in findings))
+            else:
+                parts.append("아직 추론에 쓸 만큼 모아둔 근거가 없어 — 먼저 어떤 점이 궁금한지 알려주면 같이 찾아볼게.")
         elif t == "deliver_plan":
             parts.append("슬롯이 다 찼어 — 화면의 '계획서 생성' 버튼으로 계획서를 만들면 돼.")
     if parts:
