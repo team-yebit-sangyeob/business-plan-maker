@@ -168,7 +168,7 @@ _FILL_SYSTEM = (
 - confidence: 경계 규칙으로 한 슬롯에 명확히 들어맞으면 "clear", 두 슬롯 이상에 그럴듯해 단정하기 어려우면 "ambiguous".
 - alt_slots: "ambiguous"일 때 함께 후보가 되는 다른 슬롯들(명확하면 빈 배열).
 - reason: "ambiguous"라면 왜 헷갈리는지 한 구절(예: "과금 방식이자 솔루션 형태로 모두 읽힘").
-- adequate: 값이 그 슬롯 정의가 요구하는 알맹이를 갖췄으면 true. 갖추지 못해 공허하면 false — 예: goal에 "결과물"·"잘 됐으면"(수치·기한 없음), target에 "사람들"·"누구나"(구체 대상 없음). false면 코드가 채우지 않고 되묻는다.
+- adequate: 값이 그 슬롯 정의가 요구하는 알맹이를 갖췄으면 true. 갖추지 못해 공허하면 false — 예: goal에 "결과물"·"잘 됐으면"(수치·기한 없음), target에 "사람들"·"누구나"(구체 대상 없음). 값이 슬롯 내용이 아니라 "그 슬롯이 아직 비었다"는 사실을 서술하는 비-답(예: "명시되지 않음", "제공되지 않음", "해당 없음", "알 수 없음")이면 값이 없는 것이니 false다 — 그런 비-답을 value로 지어내지 말고 fill을 내지 마라. false면 코드가 채우지 않고 되묻는다.
 
 억지로 하나로 밀어넣지 말고, 진짜 경계선이면 "ambiguous"로 둔다.
 이미 채워진 슬롯은 보통 건드리지 마라(정정은 correction이 처리). 단, 사용자가 정정 마커("빼/말고/취소") 없이 이미 찬 슬롯을 분명히 '다른 값으로' 다시 정하면, 그 슬롯과 새 값을 kind=decision으로 뽑아라 — 코드가 "바꿀까?"를 확인한다(여기서 직접 덮어쓰지 않는다).
@@ -242,7 +242,7 @@ async def extract_slot_fills_node(state: PlanState) -> dict:
                 return
 
     def _queue(slot: str, candidate_slots: list[str], confirm_kind: str, value: str,
-               reason: str, previous_value: str = "") -> None:
+               reason: str, previous_value: str = "", adequate: bool = True) -> None:
         # 주입하지 말고 사용자 확인 큐로(다음 턴 confirm_resolve가 해소).
         pending.append(
             {
@@ -254,6 +254,7 @@ async def extract_slot_fills_node(state: PlanState) -> dict:
                 "attempts": 0,
                 "confirm_kind": confirm_kind,
                 "previous_value": previous_value,
+                "adequate": adequate,
             }
         )
         queued.add(slot)
@@ -269,6 +270,13 @@ async def extract_slot_fills_node(state: PlanState) -> dict:
         # exploration을 줘도 결정론으로 승격해, 정상 슬롯 답변이 확인 질문으로 새는 걸 막는다.
         kind = "decision" if slot == last_asked else fill.kind
 
+        # 값이 공허(슬롯 알맹이 미달, 또는 "명시되지 않음" 류 비-답) → 어느 경로로도 채우지 않는다.
+        # 확인 큐(commit/slot/replace)에도 안 올린다 — "이 비-값을 넣을까?"는 헛질문이라서다.
+        # 근거 태그만 남기고 비워둔다(다음 턴 ask_slot이 되묻는다).
+        if not fill.adequate:
+            _tag_segment(slot)
+            continue
+
         # 이미 찬 슬롯 — 정정 마커 없이 '다른 값'으로 다시 정함 → 교체 확인(덮어쓰기는 확인 후에만).
         if slot not in empty_set:
             existing = ((slots.get(slot) or {}).get("value") or "").strip()
@@ -280,11 +288,6 @@ async def extract_slot_fills_node(state: PlanState) -> dict:
             ):
                 _tag_segment(slot)
                 _queue(slot, [slot], "replace", value, (fill.reason or "").strip(), existing)
-            continue
-
-        # 결정이지만 값이 공허(슬롯 알맹이 미달) → 안 채우고 비워둔다(다음 턴 되묻기). 근거 태그만 남긴다.
-        if kind == "decision" and not fill.adequate:
-            _tag_segment(slot)
             continue
 
         # 탐색 — 결정이 아니다. 채울 수 있는 빈 슬롯이면 commit 확인 큐로(턴당 1건).

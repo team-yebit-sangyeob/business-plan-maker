@@ -299,6 +299,7 @@ class PendingConfirmation(TypedDict, total=False):
     attempts: int               # 재질문 횟수 — slot kind는 2회 이상 미응답이면 proposed로 자동 확정
     confirm_kind: Literal["slot", "commit", "replace"]  # 확인 종류(기본 slot, 하위호환)
     previous_value: str         # replace 전용 — 덮어쓸 기존 슬롯 값(확인 문구·롤백 기록용)
+    adequate: bool              # 값이 슬롯 알맹이를 갖췄나 — False면 사용자가 수락해도 안 채운다(기본 True, 하위호환)
 
 
 class Citation(TypedDict, total=False):

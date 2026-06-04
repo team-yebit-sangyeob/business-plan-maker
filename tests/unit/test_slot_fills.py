@@ -73,6 +73,20 @@ def test_inadequate_decision_is_not_filled(monkeypatch):
     assert out["turn_segments"][0]["target_slot"] == "goal"  # 근거 태그는 남김
 
 
+def test_inadequate_value_is_not_queued_to_commit(monkeypatch):
+    # "명시되지 않음 —..." 같은 비-답: exploration이어도 commit 큐로 안 보낸다(헛질문 방지).
+    # 리포트 회귀: 이 값이 commit 확인을 거쳐 problem에 filled로 박히던 버그.
+    out = _run_fill(
+        _state([_claim_seg("커피 사업 하고 싶어")]),
+        [FillItem(slot="problem", value="명시되지 않음 — 고객 고통이 제공되지 않음",
+                  kind="exploration", confidence="clear", adequate=False)],
+        monkeypatch,
+    )
+    assert out["slots"]["problem"]["value"] is None       # 비워둠
+    assert out["pending_confirmations"] == []             # commit 큐로도 안 감
+    assert out["turn_segments"][0]["target_slot"] == "problem"  # 근거 태그만
+
+
 def test_exploration_queues_commit(monkeypatch):
     out = _run_fill(
         _state([_claim_seg("일본 시장도 괜찮으려나")]),

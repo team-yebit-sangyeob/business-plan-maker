@@ -88,6 +88,10 @@ async def confirm_resolve_node(state: PlanState) -> dict:
     turn = state.get("turn", 0)
 
     def _fill(slot: str, *, force: bool = False) -> None:
+        # 값이 공허(슬롯 알맹이 미달)면 사용자가 수락해도 채우지 않는다 — commit은 비가역이라
+        # 코드가 마지막 게이트를 든다(추출이 거른 걸 신뢰하지 않고 여기서 한 번 더 막는다).
+        if not item.get("adequate", True):
+            return
         existing = (slots.get(slot) or {}).get("value")
         # 이미 다른 경로로 찬 슬롯은 덮지 않는다(정정 노드 몫). replace 확인만 force로 덮어쓴다.
         if existing and not force:

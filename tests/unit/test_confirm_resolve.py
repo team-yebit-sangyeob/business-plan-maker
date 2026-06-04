@@ -16,7 +16,7 @@ from agents.orchestrator.graph import _post_confirm_branch
 
 
 def _pending(value="V", proposed="problem", candidates=None,
-             confirm_kind="commit", attempts=0, previous_value=""):
+             confirm_kind="commit", attempts=0, previous_value="", adequate=True):
     return {
         "value": value,
         "proposed_slot": proposed,
@@ -26,6 +26,7 @@ def _pending(value="V", proposed="problem", candidates=None,
         "attempts": attempts,
         "confirm_kind": confirm_kind,
         "previous_value": previous_value,
+        "adequate": adequate,
     }
 
 
@@ -64,6 +65,20 @@ def test_accept_commit_kind_does_not_drop_value(monkeypatch):
     out = _resolve(_state([_pending(value="V", proposed="problem", confirm_kind="commit")]),
                    "accept", monkeypatch)
     assert out["slots"]["problem"]["value"] == "V"
+
+
+def test_accept_inadequate_value_does_not_fill(monkeypatch):
+    # 코드 백스톱: 공허값(adequate=False)은 사용자가 수락해도 슬롯에 안 박힌다.
+    # 큐는 해소(소비)하되 슬롯은 비워둔다 — 다음 턴 ask_slot이 되묻는다.
+    out = _resolve(
+        _state([_pending(value="명시되지 않음 — 고객 고통 미제공",
+                         proposed="problem", confirm_kind="commit", adequate=False)]),
+        "accept", monkeypatch,
+    )
+    assert out["slots"]["problem"]["value"] is None
+    assert out["slots"]["problem"]["status"] == "empty"
+    assert out["pending_confirmations"] == []
+    assert out["confirmation_consumed"] is True
 
 
 def test_accept_with_additional_content_not_consumed(monkeypatch):
