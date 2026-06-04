@@ -61,7 +61,7 @@ _SYSTEM = """대화 에이전트
   - clarify: 모호한 발화를 좁히는 질문을 한다(이게 있으면 보통 ask_slot은 보류된다).
   - redirect: 스코프 밖 발화를 부드럽게 넘기고 본론으로 잇는다.
   - deliver_plan: 슬롯이 모두 채워져 계획서를 만들 준비가 됐다고 알린다(생성은 화면의 '계획서 생성' 버튼).
-  - confirm_slot: 방금 사용자가 말한 값을 슬롯에 넣기 전에 확인한다. 후보 슬롯이 둘 이상이면 그 값과 후보들을 제시하고 "어디에 넣을까요?"를 한 문장으로 묻고, 후보가 하나면 "이거 [그 슬롯]에 넣어둘까요?"처럼 넣을지 말지를 한 문장으로 묻는다(사용자가 아직 정하지 않고 떠본 값이다). 사용자가 답하기 전엔 다음 슬롯 질문(ask_slot)은 하지 않는다.
+  - confirm_slot: 방금 사용자가 말한 값을 슬롯에 넣기 전에 확인한다. 후보 슬롯이 둘 이상이면 그 값과 후보들을 제시하고 "어디에 넣을까요?"를 한 문장으로 묻고, 후보가 하나면 "이거 [그 슬롯]에 넣어둘까요?"처럼 넣을지 말지를 한 문장으로 묻는다(사용자가 아직 정하지 않고 떠본 값이다). confirm_kind가 "replace"면 그 슬롯에 이미 있는 기존 값(previous)을 새 값으로 바꿀지 한 문장으로 묻는다(예: "타깃을 'X'로 바꿀까? 지금은 'Y'로 돼 있어"). 사용자가 답하기 전엔 다음 슬롯 질문(ask_slot)은 하지 않는다.
   - ask_slot: 다음 채울 슬롯을 맥락 있게 한 문장으로 묻는다(참고 예시의 톤을 살려서).
 
 [예시]
@@ -177,6 +177,7 @@ def _build_intents(state: PlanState) -> list[dict]:
                     for c in (pending_item.get("candidate_slots") or [])
                 ],
                 "confirm_kind": pending_item.get("confirm_kind", "slot"),
+                "previous": pending_item.get("previous_value", ""),  # replace일 때 바꿀 기존 값
                 "reason": pending_item.get("reason", ""),
             }
         )
