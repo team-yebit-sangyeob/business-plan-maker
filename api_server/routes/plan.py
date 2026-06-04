@@ -12,7 +12,7 @@ from typing import Annotated, TypedDict
 from fastapi import APIRouter, Body, HTTPException, Response
 
 from agents.planner import compose_markdown
-from agents.orchestrator.nodes.gate import required_missing, optional_missing
+from common.schema.state import required_missing, optional_missing
 from api_server.pdf_renderer import render_pdf
 from api_server.session_store import get_store
 

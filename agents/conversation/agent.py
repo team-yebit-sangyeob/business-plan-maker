@@ -12,9 +12,8 @@ state에서 결정론으로 뽑고(_build_intents), 그 intent 목록을 LLM 1�
   recall           — 되묻기: 직전 대화 내용을 대화 이력에서 찾아 답(워커·검색 없이)
   explain_tool     — 도구/슬롯/사용법 메타질문에 SLOT_SPECS·APP_OVERVIEW로 답(워커·검색 없이)
   redirect         — 스코프 밖 발화를 부드럽게 되돌림
-  reject_output    — 필수 슬롯 미달 상태의 출력 요청 거절(type0)
   acknowledge      — 정정 반영 확인
-  deliver_plan     — 출력 가능 안내(type1/type2)
+  deliver_plan     — 슬롯이 전부 차서 계획서 준비 완료 안내(ready). 생성은 '계획서 생성' 버튼(POST /plan)
 
 intent 묶음 규칙: 한 턴에 여러 개가 잡히면(예: report_findings + ask_slot) 한 응답으로
 자연스럽게 잇는다. 보고할 결과는 '이번 턴' 리포트(turn_validation_reports)만 본다.
@@ -28,7 +27,6 @@ from pydantic import BaseModel
 from common.schema import PlanState
 from common.schema.state import ALL_SLOTS, SLOT_SPECS, recent_history, slot_title, tool_help_text
 from agents.orchestrator.llm import call_json
-from agents.orchestrator.nodes.gate import required_missing, optional_missing
 
 
 # 슬롯별 질문 톤은 SLOT_SPECS[...]["question"](단일 원천)에서 가져온다.
@@ -50,8 +48,7 @@ _SYSTEM = """대화 에이전트
   - explain_tool: 사용자가 이 도구·슬롯·사용법을 물었다(subject). 주어진 body(도구 설명 + 슬롯 정의 전부)를 참고해 subject가 묻는 만큼만 친근하게 답한다(새 검색·워커 없이, recent_messages도 안 씀). 특정 슬롯 하나를 물으면 그 슬롯만 한두 문장으로, 여러·모든 슬롯을 물으면 해당 슬롯들을 "- 제목: 역할" 불릿으로 빠짐없이, 도구 전반을 물으면 개요로 답한다. body에 없는 내용은 지어내지 않는다. 답한 뒤 한 문장으로 본론(계획 채우기)으로 가볍게 잇는다.
   - clarify: 모호한 발화를 좁히는 질문을 한다(이게 있으면 보통 ask_slot은 보류된다).
   - redirect: 스코프 밖 발화를 부드럽게 넘기고 본론으로 잇는다.
-  - reject_output: 필수 슬롯이 미달이라 지금은 출력이 이르다고 알리고, 무엇을 채우면 되는지 안내한다.
-  - deliver_plan: 계획서를 뽑을 수 있다고 안내한다(type2면 빈 항목은 [미정]으로 들어간다고 덧붙인다).
+  - deliver_plan: 슬롯이 모두 채워져 계획서를 만들 준비가 됐다고 알린다(생성은 화면의 '계획서 생성' 버튼).
   - confirm_slot: 방금 사용자가 말한 값을 슬롯에 넣기 전에 확인한다. 후보 슬롯이 둘 이상이면 그 값과 후보들을 제시하고 "어디에 넣을까요?"를 한 문장으로 묻고, 후보가 하나면 "이거 [그 슬롯]에 넣어둘까요?"처럼 넣을지 말지를 한 문장으로 묻는다(사용자가 아직 정하지 않고 떠본 값이다). 사용자가 답하기 전엔 다음 슬롯 질문(ask_slot)은 하지 않는다.
   - ask_slot: 다음 채울 슬롯을 맥락 있게 한 문장으로 묻는다(참고 예시의 톤을 살려서).
 
@@ -74,7 +71,6 @@ def _build_intents(state: PlanState) -> list[dict]:
     slots = state.get("slots") or {}
     segments = state.get("turn_segments") or []
     reports = state.get("turn_validation_reports") or []
-    output_request = state.get("output_request")
     turn = state.get("turn", 0)
     correction_log = state.get("correction_log") or []
 
@@ -199,21 +195,7 @@ def _build_intents(state: PlanState) -> list[dict]:
                 }
             )
 
-    # 4) 출력 게이트
-    if output_request == "type0":
-        intents.append({"type": "reject_output", "missing_required": required_missing(state)})
-        suppress_ask = True
-    elif output_request in ("type1", "type2"):
-        intents.append(
-            {
-                "type": "deliver_plan",
-                "output_type": output_request,
-                "empty_slots": optional_missing(state),
-            }
-        )
-        suppress_ask = True
-
-    # 5) clarify — 있으면 다음 슬롯 질문 보류(사용자 답 받고 다음 턴)
+    # 4) clarify — 있으면 다음 슬롯 질문 보류(사용자 답 받고 다음 턴)
     clarifications = [
         (seg.get("canonical_text") or seg.get("text", "")).strip()
         for seg in segments
@@ -225,7 +207,7 @@ def _build_intents(state: PlanState) -> list[dict]:
             intents.append({"type": "clarify", "text": text})
         suppress_ask = True
 
-    # 6) ask_slot — 위에서 막지 않았고 확인 대기도 없으면 다음 빈칸 1개
+    # 5) ask_slot — 위에서 막지 않았고 확인 대기도 없으면 다음 빈칸 1개
     if not suppress_ask and not pending_item:
         if next_empty is None:
             intents.append({"type": "deliver_plan", "output_type": "ready", "empty_slots": []})

@@ -107,7 +107,6 @@ async def _stream(session_id: str, text: str) -> AsyncIterator[dict]:
             {
                 "type": "done",
                 "next_question": question,
-                "output_request": new_state.get("output_request"),
             }
         ),
     }

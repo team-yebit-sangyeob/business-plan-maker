@@ -9,9 +9,10 @@
 ## 0. 한 문장 요약
 
 매 사용자 메시지마다 **단일 진입점**으로 들어와, LangGraph 상태머신이
-`confirm_resolve → segment → classify → correction → (dispatch → extract_fills) → gate → conversation → integrator`
-순서로 흐르며 **(보류된 슬롯 확인 해소)·분류·세그멘테이션·라우팅·슬롯 추적·출력 게이트**를 수행한다.
+`confirm_resolve → segment → classify → correction → (dispatch → extract_fills) → conversation → integrator`
+순서로 흐르며 **(보류된 슬롯 확인 해소)·분류·세그멘테이션·라우팅·슬롯 추적**을 수행한다.
 판단(무엇을 할지)만 오케스트레이터가 하고, 표현(자연어)·실행(검색·추론)은 워커가 맡는다.
+계획서 생성은 이 그래프 밖이다 — 채팅은 슬롯을 채우고 답할 뿐, 계획서는 명시적 버튼(POST /plan)에서만 합성한다.
 
 ---
 
@@ -80,7 +81,7 @@ OPTIONAL_SLOTS = tuple(s for s in ALL_SLOTS if s not in REQUIRED_SLOTS)
 
 그래프가 노드 사이로 주고받는 한 턴의 모든 것: `session_id, turn, user_input, messages[],
 turn_segments[], slots{}, correction_log[], turn_validation_reports[], turn_evidence[],
-session_evidence[], pending_clarifications[], pending_question, output_request, pending_confirmations[], last_asked_slot`.
+session_evidence[], pending_clarifications[], pending_question, pending_confirmations[], last_asked_slot`.
 `initial_state()`가 빈 한 벌을 만든다 (슬롯 10개 모두 empty).
 > `pending_confirmations[]`는 **주입을 보류한 슬롯 값 큐**(`PendingConfirmation`). fill이 슬롯 애매(`confirm_kind="slot"`)
 > 거나 결정 미확정(탐색, `confirm_kind="commit"`)으로 본 값을 슬롯 대신 여기 쌓고, 다음 턴 `confirm_resolve`가 사용자 답으로 해소한다.
@@ -108,17 +109,16 @@ START
  └▶ [clarify_branch]  ← 유일한 조건부 엣지
       ├─ dispatch  research·rag 병렬 → logic_validator 후속 (2단계, 워커 라우트 있을 때)
       │    └▶ extract_fills   빈 슬롯에 값 추출 (LLM)
-      │         └▶ gate
-      └─ gate      (명확화만 있으면 dispatch 우회)
- └▶ gate           출력 의도 판정 + Type 0/1/2 분기 (LLM)
+      │         └▶ conversation
+      └─ conversation  (명확화만 있으면 dispatch·fills 우회)
  └▶ conversation   state→intent 목록(_build_intents) 후 한 응답으로 렌더 (대화 에이전트, LLM)
  └▶ integrator     pending_clarifications만 기록 (pass-through, 결정론)
  └▶ END
 ```
 
 - `build_graph()`는 `@lru_cache(maxsize=1)` — 한 번만 컴파일, 모든 턴이 공유.
-- **노드 재시도**: LLM 노드(`confirm_resolve`·`segment`·`classify`·`correction`·`extract_fills`·`gate`·`conversation`)엔 `add_node(..., retry_policy=RetryPolicy(max_attempts=3))`로 전이 오류(429·timeout·5xx) 재시도를 단다(기본 backoff 2.0·jitter). `dispatch`는 제외 — 재시도가 리서치·RAG·논리검증 워커를 재호출해 비멱등·SSE 카드 중복을 부른다. `integrator`도 제외(LLM 없는 통과).
-- **`_clarify_branch`**: 명확화(`clarify` 라우트)만 있고 부를 워커(research/rag/logic_validator 라우트)가 하나도 없으면 `gate`로 직행 → 모호한 발화를 검증하지 않음 (기획서 6장 ②순위 규칙). `dispatch_node`와 같은 '워커 라우트 유무' 기준이라 부를 워커가 있으면 명확화가 섞여 있어도 dispatch로 보낸다.
+- **노드 재시도**: LLM 노드(`confirm_resolve`·`segment`·`classify`·`correction`·`extract_fills`·`conversation`)엔 `add_node(..., retry_policy=RetryPolicy(max_attempts=3))`로 전이 오류(429·timeout·5xx) 재시도를 단다(기본 backoff 2.0·jitter). `dispatch`는 제외 — 재시도가 리서치·RAG·논리검증 워커를 재호출해 비멱등·SSE 카드 중복을 부른다. `integrator`도 제외(LLM 없는 통과).
+- **`_clarify_branch`**: 명확화(`clarify` 라우트)만 있고 부를 워커(research/rag/logic_validator 라우트)가 하나도 없으면 `conversation`으로 직행 → dispatch·extract_fills를 우회하고 모호한 발화를 검증하지 않음 (기획서 6장 ②순위 규칙). `dispatch_node`와 같은 '워커 라우트 유무' 기준이라 부를 워커가 있으면 명확화가 섞여 있어도 dispatch로 보낸다.
 - **`run_turn(state, user_input)`**: 진입점. 턴 카운터 증가 → user 메시지 적재 → 턴 임시필드 초기화 → `graph.ainvoke` → assistant 응답을 messages에 누적.
 
 ---
@@ -232,28 +232,23 @@ logic_validator → run_logic_validator(subject, rag_result, research_report)   
 > 엔진 `run_validator`). 동기·블로킹 호출은 `asyncio.to_thread`로 감싼다. **mock 경로는 없다** —
 > `OPENAI_API_KEY`가 없으면 실행 자체가 막힌다(§4).
 
-### 3.6 `gate_node` (`nodes/gate.py`)
+### 3.6 출력 게이트 — 그래프 밖 (`POST /plan`)
 
-출력 게이트 — 기획서 8장 Type 0/1/2.
-1. `detect_output_request`: LLM 1회로 `wants_output` 판정 (키워드 false positive 회피).
-2. false면 `output_request=None` (일반 대화 턴).
-3. 분기 (결정론):
-
-| 조건 | 결과 |
-|---|---|
-| 필수 슬롯(P·T·G) 미달 | **Type 0** — 출력 거절 |
-| 선택 슬롯도 다 참 | **Type 1** — 정상 완료 |
-| 그 외 (필수만 참) | **Type 2** — 조기 출력 (빈칸 `[미정]`) |
-
-`required_missing` / `optional_missing` 헬퍼는 다른 노드도 재사용.
-- 출력 요청(`wants_output`)이 잡히면 `pending_confirmations`를 비운다 — 사용자가 진행을 택했으니 보류 중인 슬롯 확인은 흘려보낸다(출력 흐름과 충돌 방지).
+계획서 생성은 채팅 그래프가 아니라 명시적 버튼(`POST /plan`)에서만 일어난다. 채팅(이 그래프)은
+슬롯을 채우고 답할 뿐, 출력 의도를 판정하는 노드는 없다. 그 라우트가 출력 직전
+`required_missing`으로 필수 슬롯(P·T·G)을 확인해 미달이면 거절(HTTP 400), 통과하면
+`compose_markdown`으로 합성한다. 선택 슬롯이 비어 있으면(`optional_missing`) 계획서 버전에
+`(조기 출력)`을 표기하고 빈칸은 `[미정]`으로 채운다. 프론트는 필수 슬롯이 다 차기 전엔
+'계획서 생성' 버튼을 비활성화한다(2중 방어).
+> `required_missing`/`optional_missing`은 순수 상태 술어라 `common/schema/state.py`에 둔다
+> (plan 라우트가 import). conversation은 슬롯이 전부 차면 `deliver_plan`(ready)로 준비됐다고만 안내한다.
 
 ### 3.7 `conversation_node` (`agents/conversation/agent.py`)
 
 state에서 **intent 목록을 결정론으로 뽑아**(`_build_intents`) **LLM 1회로 한 응답으로 렌더** (대화 에이전트). conversation_spec TRIGGER MATRIX 전체를 지원:
-`ask_slot · confirm_slot · clarify · report_findings · answer_question · recall · explain_tool · redirect · reject_output · acknowledge · deliver_plan`.
+`ask_slot · confirm_slot · clarify · report_findings · answer_question · recall · explain_tool · redirect · acknowledge · deliver_plan`.
 > 구현 차이: conversation_spec은 `report_research`·`report_critique`를 별도 intent로 두지만, 코드는 한 주제의 research·rag·logic_validator 결과를 **`report_findings` 하나로 통합**해 넘긴다(렌더 프롬프트가 출처별로 구분). spec이 "둘은 한 턴에 묶일 수 있다(통합은 integrator 몫)"고 한 것을 그대로 반영.
-- **intent 선택(결정론)**: 이번 턴 정정→`acknowledge`, `recall` 라벨 세그먼트→`recall`(대화 이력에서 답), `tool_help` 라벨 세그먼트→`explain_tool`(SLOT_SPECS·APP_OVERVIEW에서 답, in_scope 무관), `pending_confirmations`→`confirm_slot`(보류값과 후보 슬롯 제시), `in_scope=false`→`redirect`(단 tool_help 세그먼트는 건너뛴다 — explain_tool 우선), `turn_validation_reports`→주제별 `report_findings`(claim) 또는 `answer_question`(question), `output_request`→`reject_output`(type0)·`deliver_plan`(type1/2), `clarify` 라우트→`clarify`. 위에서 막지 않았고 **확인 대기(`confirm_slot`)도 없으면** `ALL_SLOTS` 첫 빈칸으로 `ask_slot`(recall·explain_tool·confirm_slot·clarify·type0·deliver가 있으면 다음 질문 보류).
+- **intent 선택(결정론)**: 이번 턴 정정→`acknowledge`, `recall` 라벨 세그먼트→`recall`(대화 이력에서 답), `tool_help` 라벨 세그먼트→`explain_tool`(SLOT_SPECS·APP_OVERVIEW에서 답, in_scope 무관), `pending_confirmations`→`confirm_slot`(보류값과 후보 슬롯 제시), `in_scope=false`→`redirect`(단 tool_help 세그먼트는 건너뛴다 — explain_tool 우선), `turn_validation_reports`→주제별 `report_findings`(claim) 또는 `answer_question`(question), `clarify` 라우트→`clarify`. 위에서 막지 않았고 **확인 대기(`confirm_slot`)도 없으면** `ALL_SLOTS` 첫 빈칸으로 `ask_slot`(recall·explain_tool·confirm_slot·clarify가 있으면 다음 질문 보류). 빈칸이 하나도 없으면 `deliver_plan`(ready)로 준비됐다고 안내.
 - **렌더(LLM)**: intent 목록 JSON(+최근 대화 `recent_messages`)을 받아 한 메시지로 매끄럽게 연결(예: 결과 보고 → 다음 질문). `recent_messages`는 `recall` intent를 답할 때만 근거로 쓴다. 슬롯별 질문 톤은 `SLOT_SPECS[...]["question"]`(단일 원천)에서 가져와 `ask_slot.example`로 주입.
 - **분류·판단은 안 함** — 무엇을 보고/질문할지는 state에서 파생, 대화는 표현만.
 
@@ -272,7 +267,7 @@ state에서 **intent 목록을 결정론으로 뽑아**(`_build_intents`) **LLM 
 거부한다(fail-fast). 키가 있으면 항상 실 호출.
 - `langchain-openai ChatOpenAI`의 **`with_structured_output(schema, method="function_calling")`** 가 스키마 변환·함수콜 강제·파싱·pydantic 검증을 한 번에 한다 — 예전의 수동 스키마 주입+`json.loads`+`model_validate`+수동 1회 재시도를 대체(LangChain doc가 권하는 구조화 출력 idiom). `method="function_calling"`은 Optional·default·중첩 필드 많은 스키마에 안전한 드롭인(strict `json_schema`는 그 제약과 충돌 위험).
 - 전이 오류(429·timeout·5xx) 재시도는 그래프 노드의 `RetryPolicy`가 일원화한다(§2) — `call_json` 자체엔 재시도를 두지 않는다. (planner의 호출은 그래프 밖이라 전이 오류가 그대로 전파되지만, 예전 루프도 검증 오류만 잡았을 뿐 전이 오류는 전파했다 — 동작 동일.)
-- **추론 강도**: 기본 모델 `gpt-5.4-mini`는 추론 모델이라 `reasoning_effort` 미설정이면 서버 기본(=medium) 추론으로 돌아 한 턴의 순차 호출(segment·classify·gate·conversation 등)이 수십 초로 쌓인다. `BPM_LLM_REASONING`(기본 `low`)으로 추론 강도를 낮춰 지연을 줄인다 — `call_json`이 추론 모델(`gpt-5`·`o`계열, `chat` 제외)일 때만 `ChatOpenAI`에 `reasoning_effort`로 넘기고, 비추론 모델엔 넘기지 않는다(`gpt-5` 비-chat은 langchain-openai가 `temperature`를 자동 제거). 노드별로 더 낮추고 싶으면 `call_json(..., reasoning_effort="minimal")` 인자로 덮는다.
+- **추론 강도**: 기본 모델 `gpt-5.4-mini`는 추론 모델이라 `reasoning_effort` 미설정이면 서버 기본(=medium) 추론으로 돌아 한 턴의 순차 호출(segment·classify·correction·conversation 등)이 수십 초로 쌓인다. `BPM_LLM_REASONING`(기본 `low`)으로 추론 강도를 낮춰 지연을 줄인다 — `call_json`이 추론 모델(`gpt-5`·`o`계열, `chat` 제외)일 때만 `ChatOpenAI`에 `reasoning_effort`로 넘기고, 비추론 모델엔 넘기지 않는다(`gpt-5` 비-chat은 langchain-openai가 `temperature`를 자동 제거). 노드별로 더 낮추고 싶으면 `call_json(..., reasoning_effort="minimal")` 인자로 덮는다.
 - 모델 교체: `BPM_LLM_MODEL`(오케스트레이터, 기본 `gpt-5.4-mini`), `OPENAI_MODEL`(리서치/RAG, 기본 `gpt-5.4-mini`). 추론 강도: `BPM_LLM_REASONING`(기본 `low`).
 - 오케스트레이터·리서치 진입·검색 프로바이더의 env 읽기는 `common/config.py` 명명 접근자
   (`orchestrator_model`·`require_openai_key`·`search_provider` 등)로 모은다 — 이 호출부는
@@ -288,7 +283,7 @@ state에서 **intent 목록을 결정론으로 뽑아**(`_build_intents`) **LLM 
 | 신규 단일 발화 | 라벨에 따라 | 잠재적 | 7유형 라벨링 → 매트릭스 |
 | 신규 다중 발화 | 세그먼트별 병렬 | 잠재적 | 라우트별 분기 |
 | 정정 신호 | (재검증 보류 — 아래 갭) | **필수** | correction_node 먼저 |
-| 출력 요청 | Planner (게이트 통과 시) | 없음 | Type 0/1/2 |
+| 출력 요청("뽑아줘") | 없음 (생성은 버튼 `POST /plan`) | 없음 | 채팅엔 gate 없음 — `meta`로 흐름 |
 | 스코프 밖 발화 | 없음 (리다이렉트) | 없음 | `in_scope=false` → routes none |
 | 메타·단순응답 | 없음 | 없음 | interaction(`meta`) — "응"·"다음" 등 |
 | 되묻기 | 없음 | 없음 | interaction(`recall`) — 대화 이력에서 답("아까 ~라며?") |
@@ -333,7 +328,6 @@ agents/orchestrator/
    ├─ classify.py        다중 라벨 + 라우팅 매트릭스
    ├─ correction.py      정정 해소 + 슬롯 채움 (애매하면 pending 큐로 보류)
    ├─ dispatch.py        리서치·RAG 병렬 → 논리검증 2단계 호출
-   ├─ gate.py            출력 게이트 Type 0/1/2
    └─ integrator.py      응답 통합 (결정론)
 
 agents/conversation/agent.py   대화 에이전트 (intent 선택 + 한 응답 렌더)

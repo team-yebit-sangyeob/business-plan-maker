@@ -55,7 +55,6 @@ export interface SessionSnapshot {
   turn: number;
   slots: Record<string, Slot>;
   pending_question: string;
-  output_request: string | null;
   correction_count?: number;
 }
 
@@ -102,7 +101,7 @@ export type ChatEvent =
       source_label: SourceLabel;
       status: Slot["status"];
     }
-  | { type: "done"; next_question: string; output_request: string | null };
+  | { type: "done"; next_question: string };
 
 // 채팅창에 보여줄 에이전트 활동 한 줄 — 실행 중(running)으로 떴다가 결과(done)로 해소.
 export interface AgentActivity {
