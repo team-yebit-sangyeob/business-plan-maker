@@ -21,6 +21,9 @@ OPENAI_MODEL은 research_model()과 rag 양쪽에서 읽힌다(같은 기본값)
 추론으로 돌아 한 턴(segment·classify·correction·conversation 등 순차 호출)이 느려진다. 그래서
 BPM_LLM_REASONING(기본 low)으로 추론 강도를 낮춰 지연을 줄인다 — call_json이 추론 모델일 때만
 ChatOpenAI에 reasoning_effort로 넘긴다.
+단, 사용자 최종 응답을 만드는 conversation_node만 BPM_CONVERSATION_REASONING(기본 medium)으로
+분리한다 — 전역 low가 이 노드의 intent·findings 렌더를 메타 응답("응답 준비됐습니다" 등)으로
+뭉개는 회귀를 막기 위해(턴당 1회·핫 병렬 경로 밖이라 높은 추론을 감당할 수 있다).
 
 [키 부재 처리는 키마다 다르다]
   - OPENAI_API_KEY 없음 → 하드 차단: require_openai_key가 RuntimeError로 기동/호출을 막는다.
@@ -52,6 +55,17 @@ def orchestrator_reasoning_effort() -> str:
     minimal/low/medium/high 중 하나. 기본 low로 지연을 줄이되 분류 품질은 유지한다.
     """
     return os.environ.get("BPM_LLM_REASONING", "low")
+
+
+def conversation_reasoning_effort() -> str:
+    """대화 에이전트(사용자 최종 응답) 추론 강도 — BPM_CONVERSATION_REASONING (기본 medium).
+
+    conversation_node는 턴당 1회·핫 병렬 경로(segment·classify·correction) 밖이라 높은 추론을
+    감당할 수 있다. 전역 BPM_LLM_REASONING(기본 low)은 지연을 줄이려 intent·findings를 메타
+    응답("응답 준비됐습니다" 등)으로 뭉개므로, 이 노드만 별도 노브로 medium에서 렌더하게
+    분리한다. 추론 모델(gpt-5·o계열)에만 적용된다 — call_json이 비추론 모델엔 안 넘긴다.
+    """
+    return os.environ.get("BPM_CONVERSATION_REASONING", "medium")
 
 
 # --- OpenAI 키 --------------------------------------------------------------
