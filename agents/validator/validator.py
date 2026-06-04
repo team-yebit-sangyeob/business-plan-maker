@@ -69,7 +69,7 @@ load_dotenv(os.path.join(os.path.dirname(__file__), "..", "..", ".env"))
 # ValidatorAgent 가 실행할 수 있는 최대 툴 호출 횟수.
 # SearchHighlightAgent(12)보다 낮게 설정 — 초기 증거가 이미 제공되므로
 # 추가 탐색 횟수는 적어도 충분하다.
-MAX_VALIDATOR_TURNS: int = int(os.getenv("MAX_VALIDATOR_TURNS", "6"))
+MAX_VALIDATOR_TURNS: int = int(os.getenv("MAX_VALIDATOR_TURNS", "3"))
 
 
 # ─── 결과 타입 정의 ─────────────────────────────────────────────────────────────
@@ -174,7 +174,7 @@ Step 1: Highlight Grounding Validation
 	2. highlight 가 REFLECTS 라고 판단되면 그대로 사용한다.
 	3. highlight 가 PARTIALLY_REFLECTS, MISREPRESENTS, NOT_GROUNDED 중 하나라면 raw_source 만 사용하여 highlight 를 재작성한다. claim 은 절대 참고하지 않는다.
 	4. 재작성한 highlight 를 다시 평가한다.
-	5. 최대 3회 반복한다.
+	5. 최대 2회 반복한다.
 	6. 가장 품질이 높은 highlight 를 최종 evidence 로 채택한다.
 
 - 중요
