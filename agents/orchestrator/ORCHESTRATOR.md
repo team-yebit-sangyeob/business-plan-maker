@@ -205,13 +205,13 @@ START
 dispatch 경로에서만 실행 (그래프상 dispatch 다음). 세그먼트에서 슬롯 값을 추출해 주입/확인하고, **슬롯 선택의 단일 권위**다(segment는 더 이상 힌트를 주지 않으므로 — 정의·경계만으로 정한다).
 - 후보 = `claim` 라벨 가진 세그먼트. (빈 슬롯이 없어도 충돌 교체 감지를 위해 호출한다 — 예전의 "빈 슬롯 없으면 스킵"은 제거.)
 - `_FILL_SYSTEM`에 `slot_guide_text()` + **`[직전 대화]`(recent_history)** + `[현재 슬롯]`·`[비어있는 슬롯]` 임베드. LLM은 fill마다 `{slot, value, kind(decision|exploration), confidence(clear|ambiguous), alt_slots[], reason, adequate}` 반환. 축: `kind`(**결정**했나)·`confidence`(**어느 슬롯**인지 명확)·`adequate`(값이 슬롯 정의의 **알맹이**를 갖췄나).
-- `kind=decision` 기준: (a) 명시적 확정("X로 하자/가자/정했어") 또는 (b) 직전에 어시스턴트가 물은 슬롯 질문에 직접 답함. 단순 탐색·가설은 `exploration`. (b)는 **결정론 안전망** — `conversation_node`가 `ask_slot` 때 `last_asked_slot`을 기록하고, fill은 그 슬롯 답이면 LLM이 `exploration`을 줘도 `decision`으로 승격(짧은 명사구 답이 확인 질문으로 새는 과차단 방지).
-- 쓰기 게이트:
-  - **이미 찬 슬롯 + 다른 값(결정, 정정 마커 없음)** → 덮어쓰지 않고 `pending_confirmations`(`confirm_kind="replace"`, `previous_value`=기존 값)에 쌓아 다음 턴 "바꿀까?"를 확인 — 사용자의 새 값이 묵살되던(찬 슬롯이라 fill이 건드리지 않고 correction도 안 도는) 문제를 막는다. 명시적 정정("빼/말고")은 그대로 correction_node가 직접 적용(확인 불필요).
-  - **결정 + 공허(`adequate=false`)** → 채우지 않고 비워둔다(다음 턴 빈칸으로 되묻기). "골은 결과물"처럼 슬롯 기준 미달 값이 박히는 걸 막는 충분성 게이트의 정밀 단계(coarse는 classify, §3.2).
-  - **결정 + 슬롯 명확 + 충분** → 빈 슬롯에 즉시 주입(`source_label=USER`).
-  - **결정 + 슬롯 애매**(`ambiguous`/`alt_slots`) → `pending_confirmations`(`confirm_kind="slot"`)에 쌓음(후보 중 빈 슬롯 없으면 스킵). 다음 턴 "어느 슬롯?" 답으로 확정.
-  - **탐색** → 주입 안 함. 빈 슬롯이면 `pending_confirmations`(`confirm_kind="commit"`, **턴당 1건**)에 쌓아 "이거 X에 넣을까요?"를 묻고, 미응답이면 드롭.
+- `kind=decision` 기준: (a) 명시적 확정("X로 하자/가자/정했어") 또는 (b) 직전에 어시스턴트가 물은 슬롯 질문에 직접 답함. 단순 탐색·가설은 `exploration`. **빈 슬롯은 결정/탐색 무관하게 채우므로(가역), `kind`는 이제 주로 *이미 찬 슬롯을 덮어쓸지*(replace)를 가른다** — 확정이면 "바꿀까?" 확인, 떠보는 말이면 기존 값은 안 건드린다. (b)는 그 안전망 — `last_asked_slot`에 답한 값은 `exploration`이라도 `decision`으로 승격해, 찬 슬롯이면 교체 확인으로 간다.
+- 쓰기 게이트 (**빈 슬롯 채움은 가역이라 적극적으로 채운다** — 확인은 비가역에 가까운 경우만):
+  - **빈 슬롯 + 슬롯 명확 + 충분** → 즉시 주입(`source_label=USER`). **결정/탐색 무관** — 떠보는 말이어도 빈 칸이면 채운다(틀리면 "빼/바꿔"로 정정, 가역). 한 턴에 빈 슬롯이 여럿이면 **다 채운다**(턴당 캡 없음). 사용자가 자연스레 여러 사실을 한 턴에 말해도 다 박힌다.
+  - **빈 슬롯 + 슬롯 애매**(`ambiguous`/`alt_slots`) → `pending_confirmations`(`confirm_kind="slot"`)에 쌓음(후보 중 빈 슬롯 없으면 스킵). 다음 턴 "어느 슬롯?" 답으로 확정 — *잘못된 칸*은 가역이 아니라 확인을 남긴다.
+  - **이미 찬 슬롯 + 다른 값(결정, 정정 마커 없음)** → 덮어쓰지 않고 `pending_confirmations`(`confirm_kind="replace"`, `previous_value`=기존 값)에 쌓아 다음 턴 "바꿀까?"를 확인 — *덮어쓰기는 비가역적 손실*이라 확인 후에만. 탐색이면 기존 값은 안 건드린다. 명시적 정정("빼/말고")은 그대로 correction_node가 직접 적용(확인 불필요).
+  - **공허(`adequate=false`)** → 어느 경로로도 안 채운다(다음 턴 빈칸으로 되묻기). "골은 결과물"처럼 슬롯 기준 미달 값이 박히는 걸 막는 충분성 게이트의 정밀 단계(coarse는 classify, §3.2).
+  - `confirm_kind="commit"`은 이제 fill이 아니라 **`conversation`의 reason 제안**(§3.7)에서만 만든다 — fill의 *탐색→commit 큐(턴당 1건)·미응답 드롭* 경로는 제거했다(빈 슬롯 적극 채움으로 대체). "너무 안 채워줌"의 주범이 여러 사실을 한 턴에 말할 때 1건만 큐에 걸고 나머지를 드롭하던 이 경로였다.
 - **근거 슬롯 태그(Part 1)**: 처리한 각 fill의 슬롯을 아직 태그 없는 `claim` 세그먼트에 순서대로 단다(`target_slot`) — segment가 더는 힌트를 주지 않으므로, `run_turn`의 evidence→슬롯 백필(§1)이 쓸 연결을 fill이 채운다.
 - → "결정 안 한 값이 박히는"·"같은 내용이 다른 슬롯에"·"공허한 값이 박히는"·"찬 슬롯 새 값이 묵살되는" 문제를 경계 명문화 + 선택 단일화 + 결정/탐색/충분성/충돌 분리 + 확인으로 막는다.
 
