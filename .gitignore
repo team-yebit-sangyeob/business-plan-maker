@@ -67,3 +67,5 @@ infra/vector_db/documents/**
 agents/rag/rag_main.py
 agents/validator/run_rag_val.py
 agents/validator/run_val.py
+# 분류 모델 선정 하니스 (로컬 실험 도구)
+evals/
