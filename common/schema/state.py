@@ -274,6 +274,7 @@ class Segment(TypedDict, total=False):
     in_scope: bool                       # 사업 계획과 관련 있는 발화인가. False면(무맥락 사실·잡담·무관 요청) classify가 routes=["none"]로 막고 conversation이 redirect intent로 부드럽게 되돌린다. 기본 True(애매하면 통과 — 과차단 방지).
     target_slot: str | None              # 들어갈 슬롯(있으면): "target"
     routes: list[Route]                  # 발동 워커: ["research","rag","logic_validator"]. 처리 우선순위·분기는 routes/utterance_types에서 직접 파생(별도 priority 필드 없음).
+    verifiable: Literal["verify", "skip", "uncertain"]  # 외부에서 참/거짓을 따질 전제가 있나. skip이면 claim이어도 워커 디스패치 안 함(사용자 결정·취향·제약 — 검증 대상 아님). uncertain은 안전하게 verify로 라우팅. 기본 verify(보수 — claim→skip 오라벨이 팩트체크를 건너뛰는 위험을 막는다).
 
 
 class Correction(TypedDict):
