@@ -91,7 +91,9 @@ open_proposal, confirmation_consumed, last_asked_slot, evidence_mode`.
 `initial_state()`가 빈 한 벌을 만든다 (슬롯 10개 모두 empty).
 > `pending_confirmations[]`는 **주입을 보류한 슬롯 값 큐**(`PendingConfirmation`). fill이 슬롯 애매(`confirm_kind="slot"`)·
 > 결정 미확정(탐색, `confirm_kind="commit"`)·찬 슬롯과 충돌(교체, `confirm_kind="replace"`)로 본 값을 슬롯 대신 여기 쌓고,
-> 다음 턴 `confirm_resolve`가 사용자 답으로 해소한다.
+> 다음 턴 `confirm_resolve`가 사용자 답으로 해소한다. **두 번째 등록 출처는 `conversation_node`** — reason 제안 모드②가
+> 슬롯 값을 제안하면 그 제안을 여기 commit/replace로 쌓는다(§3.7). 한 슬롯에 여러 안을 제시하면 `candidate_values[]`에
+> [추천, *대안]을 싣고, `confirm_resolve`가 `chosen_index`로 고른다(단일 안이면 비움).
 > 다른 턴 임시필드와 달리 `run_turn`이 리셋하지 않아 **턴을 넘어 영속**(세션 스토어가 통째 저장).
 > `open_proposal`·`confirmation_consumed`는 **이번 턴 전용**(`run_turn`이 매 턴 박는다): `open_proposal`은 턴 시작 시점의
 > 열린 제안 스냅샷(`pending_confirmations[0]`) — `confirm_resolve`가 라이브 큐를 pop해도 segment·classify가 "이번 발화가
@@ -142,8 +144,8 @@ START
 ### 3.0 `confirm_resolve_node` (`nodes/confirm.py`)
 
 **토폴로지상 맨 앞(START 직후)** — `pending_confirmations`가 비어 있으면 no-op이라 일반 턴엔 영향이 없다. 큐에 보류 건이 있으면, 이번 사용자 발화를 그 제안에 대한 답으로 보고 **태도(decision)**를 LLM이 판정한다(명령형 "이대로 넣어/넣어"도 제안에 대한 긍정이면 accept — 새 리서치 주문이 아니다; 보기는 예시지 정답 키워드가 아니라 의미로 판단):
-- `accept`: 제안대로 넣으라는 긍정·명령 → 제안 슬롯에 주입(`replace`면 기존 값 덮어쓰기 + correction_log 기록; 그 외엔 이미 찬 슬롯을 덮지 않음) + 큐 제거.
-- `pick`: 후보 둘 이상에서 하나 선택 → 그 슬롯 주입 + 큐 제거.
+- `accept`: 제안대로 넣으라는 긍정·명령 → 제안 슬롯에 주입(`replace`면 기존 값 덮어쓰기 + correction_log 기록; 그 외엔 이미 찬 슬롯을 덮지 않음) + 큐 제거. 다중 후보 값(`candidate_values`)이면 특정 안을 콕 집지 않은 수락이라 추천안(`value`=1순위)으로 채운다.
+- `pick`: 제시한 후보 중 하나 선택 → 그 슬롯·그 값 주입 + 큐 제거. (a) 후보 **슬롯**이 둘 이상이면 `slot`으로 어느 칸인지, (b) 한 슬롯에 후보 **값**이 여럿(`candidate_values`, reason 제안 모드②)이면 `chosen_index`(1-base)로 어느 안인지 고른다. 제시한 안 어디에도 없는 새 값을 말하면 accept/pick이 아니라 `revise`로 본다 — 명령형 "~로 하자"여도 억지로 가까운 안에 매칭해 잘못된 값을 박지 않는다.
 - `reject`: "아니/빼" 부정 → 큐에서 제거(슬롯 그대로).
 - `revise`: 값을 고쳐서 넣으라 → 스테일 값 버리고 큐 제거, 주입 안 함(고친 값은 파이프라인이 다시 뽑음).
 - `unrelated`: 그 질문과 무관한 다른 얘기 → `confirm_kind`로 가른다. `commit`(결정 미확정)·`replace`(교체 확인)는 드롭(결정/교체 안 한 건 안 건드린다), `slot`(값은 결정, 칸만 모름)은 `attempts++` 후 한도(2회) 넘으면 제안 슬롯으로 자동 확정(무한 재질문 방지).
@@ -278,6 +280,7 @@ state에서 **intent 목록을 결정론으로 뽑아**(`_build_intents`) **LLM 
 > 구현 차이: conversation_spec은 `report_research`·`report_critique`를 별도 intent로 두지만, 코드는 한 주제의 research·rag·logic_validator 결과를 **`report_findings` 하나로 통합**해 넘긴다(렌더 프롬프트가 출처별로 구분). spec이 "둘은 한 턴에 묶일 수 있다(통합은 integrator 몫)"고 한 것을 그대로 반영.
 - **intent 선택(결정론)**: 이번 턴 정정→`acknowledge`, `recall` 라벨 세그먼트→`recall`(대화 이력에서 답), `tool_help` 라벨 세그먼트→`explain_tool`(SLOT_SPECS·APP_OVERVIEW에서 답, in_scope 무관), `reason` 라벨 세그먼트→`reason_over_context`(누적 근거 `session_evidence`+대화이력을 재료로 실어 직접 추론·제안, in_scope 무관), `pending_confirmations`→`confirm_slot`(보류값과 후보 슬롯 제시; `confirm_kind="replace"`면 기존 값 `previous`를 실어 "X로 바꿀까?"로 물음), `in_scope=false`→`redirect`(단 tool_help·reason 세그먼트는 건너뛴다 — explain_tool·reason_over_context 우선), `turn_validation_reports`→주제별 `report_findings`(claim) 또는 `answer_question`(question), `clarify` 라우트→`clarify`. 위에서 막지 않았고 **확인 대기(`confirm_slot`)도 없으면** `ALL_SLOTS` 첫 빈칸으로 `ask_slot`(recall·explain_tool·reason_over_context·confirm_slot·clarify가 있으면 다음 질문 보류). 빈칸이 하나도 없으면 `deliver_plan`(ready)로 준비됐다고 안내.
 > **`reason_over_context`의 두 모드** — `reason` 발화가 ① **종합 요청**이면 가진 근거를 1~5문장으로 정리해 전하고, ② **제안·결정 요청**("네 생각엔 문제가 뭐야?")이면 **되묻지 않고** 그 슬롯에 들어갈 구체적 후보를 직접 제안하고 채택/수정을 한 문장으로 묻는다. 어느 슬롯인지는 코드가 주입하지 않고 LLM이 `subject`("…문제는…")와 `slots` 상태로 정한다(표현 결정은 LLM 몫). 예: 누적 근거에 "저가 커피 포화·수익성 악화"가 있을 때 `"네 생각엔 우리 문제가 뭐야?"` → **"모은 걸 보면 저가 커피 포화로 신규 점포 수익성이 떨어지는 게 핵심 문제 같아 — 이렇게 잡아볼까?"**. 근거가 비면 일반 추론으로 한 후보를 던지되 부족함을 밝히고 무엇을 먼저 찾을지 한 문장으로 잇는다. **회귀 배경**: 예전엔 제안 요청이 `question`으로 흘러 또 리서치를 돌리거나, 막판 `ask_slot`이 같은 질문("누가·어떤 상황에서…")을 사용자에게 되묻던 — "네 의견을 달라"는데 의견을 안 주는 회피였다. classify의 reason 확장(§3.2 ④) + segment의 프레이밍 보존(§3.1) + 이 제안 모드가 한 세트로 이 회피를 막는다.
+> **제안→채택→슬롯반영 루프(②의 뒷단)** — 모드②에서 LLM은 메시지에 제안을 쓰면서 **구조화 필드 `proposal={slot, value, alternatives[]}`**도 함께 낸다(표현이 아니라 '무엇을 제안했나'라는 재료). `conversation_node`(코드)가 이를 받아 `pending_confirmations`에 등록한다 — 빈 슬롯이면 `confirm_kind="commit"`, 이미 찬 슬롯이면 `replace`(+`previous_value`), 여러 안을 제시하면 `candidate_values`에 [추천, *대안]을 싣는다(단일 안이면 비움). 등록은 reason intent가 있는 턴에서만, 같은 슬롯이 큐에 없을 때만(코드 가드). 그래야 다음 턴 `run_turn`이 `open_proposal`을 스냅샷하고(§2), `confirm_resolve`가 사용자의 수락(`accept`→추천안)·선택(`pick`+`chosen_index`→그 안)·거부·수정을 슬롯에 반영한다(§3.0) — `extract_slot_fills`의 commit/replace 확인과 **같은 메커니즘 재사용**(신규 분기 0). 이게 없으면 어시스턴트 제안이 메시지 텍스트로만 남아, 사용자가 "그걸로 하자"라고 해도 묶일 대상이 없고 그 발화가 `meta`/`clarify`로 떨어져 증발한다(원래 갭). 책임 경계: LLM은 제안 표현 + 제안 내용(`proposal`)만, 확인 큐 등록·commit/replace 판정·pick 해소는 코드.
 - **렌더(LLM)**: intent 목록 JSON(+최근 대화 `recent_messages`)을 받아 한 메시지로 매끄럽게 연결(예: 결과 보고 → 다음 질문). `recent_messages`는 `recall` intent를 답할 때만 근거로 쓴다. 슬롯별 질문 톤은 `SLOT_SPECS[...]["question"]`(단일 원천)에서 가져와 `ask_slot.example`로 주입.
 - **분류·판단은 안 함** — 무엇을 보고/질문할지는 state에서 파생, 대화는 표현만.
 
