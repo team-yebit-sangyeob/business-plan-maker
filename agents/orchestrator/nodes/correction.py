@@ -23,7 +23,8 @@ extract_slot_fills_node: 정정 이후 단계에서, claim 세그먼트의 값�
     다음 턴 confirm_resolve가 "이거 솔루션이에요 차별점이에요?" 답으로 확정(잘못된 칸 방지).
   - 이미 찬 슬롯 + 다른 값(결정, 정정 마커 없음) → confirm_kind="replace"로 "바꿀까?" 확인
     (덮어쓰기는 비가역적 손실이라 확인 후에만). 탐색이면 기존 값은 안 건드린다.
-  - 값이 공허(adequate=false) → 어느 경로로도 안 채운다(다음 턴 ask_slot이 되묻는다).
+  - 값이 공허(adequate=false) → 어느 경로로도 안 채운다. 단 빈 슬롯에 사용자가 직접 준
+    부분값이면 incomplete_fills에 남겨, conversation이 그 슬롯을 우선 되묻게 한다(받은 건 인정+빠진 알맹이만).
   (confirm_kind="commit"은 이제 conversation의 reason 제안 경로에서만 쓰인다 — agent.py.)
 
   예: 직전에 "타겟이 누구예요?" 물음 + 세그먼트 "(claim) 네이버 콘텐츠 운영팀"
@@ -43,6 +44,7 @@ from common.schema import PlanState, Correction
 from common.schema.labels import SourceLabel
 from common.schema.state import (
     ALL_SLOTS,
+    IncompleteFill,
     PendingConfirmation,
     recent_history,
     slot_guide_text,
@@ -203,12 +205,23 @@ class FillOut(BaseModel):
     fills: list[FillItem] = Field(default_factory=list)
 
 
+# 비-답 표지 — fill LLM이 (지시를 어기고) 값 대신 "그 슬롯이 비었다"는 사실을 서술로 낼 때의 흔적.
+# 이건 진짜 부분값이 아니라 부재 서술이라, incomplete_fills로 남겨 "받았어"라고 인정하면 헛소리가
+# 된다("'명시되지 않음'은 받았어 —"). 채움·확인큐는 이미 adequate=false로 막혔고(아래), 여기선
+# 되묻기 신호에 들어가지 못하게 한 번 더 거른다(막연하지만 실질이 있는 "결과물" 류는 통과시킨다).
+_NON_ANSWER_MARKERS = ("명시되지 않", "제공되지 않", "해당 없", "알 수 없", "확인되지 않", "언급되지 않")
+
+
+def _is_non_answer(value: str) -> bool:
+    return any(m in value for m in _NON_ANSWER_MARKERS)
+
+
 async def extract_slot_fills_node(state: PlanState) -> dict:
     """claim 세그먼트에서 슬롯 값을 추출해 즉시 주입하거나 확인 큐로 보낸다 →
-    {"slots","turn_segments","pending_confirmations"}(없으면 {}).
+    {"slots","turn_segments","pending_confirmations","incomplete_fills"}(없으면 {}).
 
-    - 빈 슬롯: 결정+명확 → 즉시 주입(단 값이 공허하면 안 채우고 비워둔다 — 다음 턴 되묻기),
-      결정+애매 → slot 확인 큐, 탐색 → commit 확인 큐(턴당 1건).
+    - 빈 슬롯: 결정+명확 → 즉시 주입(단 값이 공허하면 안 채우고 incomplete_fills에 남겨 다음
+      응답에서 그 슬롯을 우선 되묻기), 결정+애매 → slot 확인 큐, 탐색 → commit 확인 큐(턴당 1건).
     - 이미 찬 슬롯: 정정 마커 없이 '다른 값'으로 다시 정하면 replace 확인 큐(교체는 확인 후에만).
     - dispatch된 claim 세그먼트엔 근거→슬롯 연결용 target_slot을 태그한다(segment가 더는 슬롯
       힌트를 주지 않으므로). [직전 대화]는 kind 판정 (b)("방금 물은 슬롯에 직접 답했나") 근거.
@@ -240,6 +253,7 @@ async def extract_slot_fills_node(state: PlanState) -> dict:
     pending = list(state.get("pending_confirmations") or [])
     queued = {p.get("proposed_slot") for p in pending}  # 이미 확인 대기 중인 슬롯
     decided: set[str] = set()                            # 이번 턴에 쓰거나 큐에 넣은 슬롯
+    incomplete: list[IncompleteFill] = []                # 알맹이 모자라 못 채운 빈 슬롯 — conversation이 되묻는다
 
     def _tag_segment(slot: str) -> None:
         # 근거→슬롯 연결용 — fill이 본 슬롯을 아직 태그 없는 claim 세그먼트에 순서대로 단다.
@@ -280,9 +294,20 @@ async def extract_slot_fills_node(state: PlanState) -> dict:
 
         # 값이 공허(슬롯 알맹이 미달, 또는 "명시되지 않음" 류 비-답) → 어느 경로로도 채우지 않는다.
         # 확인 큐(commit/slot/replace)에도 안 올린다 — "이 비-값을 넣을까?"는 헛질문이라서다.
-        # 근거 태그만 남기고 비워둔다(다음 턴 ask_slot이 되묻는다).
+        # 다만 조용히 버리지 않는다: 빈 슬롯에 사용자가 알맹이 모자란 값을 직접 준 거면(예: goal에
+        # 기한·실패선 없이 "10% 해소") incomplete에 남겨, conversation이 받은 부분은 인정하고 빠진
+        # 알맹이만 콕 집어 '그 슬롯을' 되묻게 한다(A) — 캐논 첫 빈칸이 아니라(C). 이미 찬 슬롯이나
+        # 이번 턴 이미 처리한 슬롯은 다시 캐묻지 않는다("명시되지 않음" 류 비-답은 partial이 의미 없어 그냥 태그만).
         if not fill.adequate:
             _tag_segment(slot)
+            if (
+                slot in empty_set
+                and slot not in decided
+                and slot not in queued
+                and not _is_non_answer(value)
+                and not any(f["slot"] == slot for f in incomplete)
+            ):
+                incomplete.append({"slot": slot, "partial_value": value})
             continue
 
         # 이미 찬 슬롯 — 정정 마커 없이 '다른 값'으로 다시 정함 → 교체 확인(덮어쓰기는 확인 후에만).
@@ -331,4 +356,5 @@ async def extract_slot_fills_node(state: PlanState) -> dict:
         "slots": slots,
         "turn_segments": segments,
         "pending_confirmations": pending,
+        "incomplete_fills": incomplete,
     }

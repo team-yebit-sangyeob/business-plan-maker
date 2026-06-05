@@ -304,6 +304,16 @@ class PendingConfirmation(TypedDict, total=False):
     adequate: bool              # 값이 슬롯 알맹이를 갖췄나 — False면 사용자가 수락해도 안 채운다(기본 True, 하위호환)
 
 
+class IncompleteFill(TypedDict):
+    # 사용자가 이번 턴에 어떤 슬롯을 직접 채우려 했지만 값의 알맹이가 모자라(fill의 adequate=false)
+    # 못 들어간 한 건. extract_slot_fills가 조용히 버리는 대신 여기 남기면 conversation이
+    #   (A) 받은 부분값(partial_value)은 인정하고, 그 슬롯 정의가 요구하는 빠진 알맹이만 콕 집어 되묻고,
+    #   (C) 캐논 질문 순서(첫 빈칸)보다 이 슬롯을 먼저 묻는다(사용자가 지목한 칸을 무시하지 않는다).
+    # extract_fills→conversation 한 턴 안에서만 흐르는 신호 — run_turn이 매 턴 리셋한다.
+    slot: str            # 사용자가 채우려던 슬롯("goal")
+    partial_value: str   # 받았지만 알맹이가 모자란 값("선정성 불일치 10% 해소")
+
+
 class Citation(TypedDict, total=False):
     # 근거 1건의 구조화 출처 — research/RAG를 한 타입으로 표현한다. 그동안 sources:list[str]로
     # 납작하게 버려지던 제목·인용문·페이지·관련도·접근일을 보존해 계획서가 출처를 자세히 인용한다.
@@ -382,6 +392,7 @@ def initial_state() -> "PlanState":
         "pending_clarifications": [],
         "pending_question": "",
         "pending_confirmations": [],
+        "incomplete_fills": [],
         "open_proposal": None,
         "confirmation_consumed": False,
         "last_asked_slot": None,
@@ -413,6 +424,9 @@ class PlanState(TypedDict, total=False):
     pending_question: str
     # 애매해서 주입 보류된 확인 큐 — 한 번에 하나씩 confirm_slot으로 묻는다. 턴 넘어 영속.
     pending_confirmations: list[PendingConfirmation]
+    # 이번 턴 사용자가 직접 채우려 했지만 알맹이가 모자라(fill adequate=false) 못 들어간 슬롯들.
+    # extract_fills가 적재하고 conversation이 (A)부분값 인정+빠진 알맹이 되묻기 (C)그 슬롯 우선 질문에 쓴다. 매 턴 리셋.
+    incomplete_fills: list[IncompleteFill]
     # 턴 시작 시점의 열린 제안 스냅샷(pending_confirmations[0]) — confirm_resolve가 라이브 큐를
     # pop해도 segment·classify가 "이번 발화가 무엇에 대한 답인가"를 보게 매 턴 run_turn이 박아준다.
     open_proposal: PendingConfirmation | None

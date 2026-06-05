@@ -4,7 +4,9 @@
 state에서 결정론으로 뽑고(_build_intents), 그 intent 목록을 LLM 1회로 한 메시지로 엮는다.
 
 지원 intent(conversation_spec TRIGGER MATRIX 전체):
-  ask_slot         — 비어있는 슬롯 질문(기본 질문 순서 = ALL_SLOTS 첫 빈칸)
+  ask_slot         — 비어있는 슬롯 질문(기본 질문 순서 = ALL_SLOTS 첫 빈칸. 단 사용자가 이번 턴
+                     직접 채우려다 알맹이가 모자라 못 들어간 슬롯(incomplete_fills)이 있으면 그 슬롯을
+                     먼저 묻고, 받은 부분값(partial)은 인정하고 빠진 알맹이만 마저 묻는다)
   confirm_slot     — 애매해서 보류된 주입을 어느 슬롯에 넣을지 확인(있으면 ask_slot 보류)
   clarify          — 모호한 발화 좁히기(있으면 다음 슬롯 질문은 보류)
   report_findings  — 리서치(외부)·RAG(내부)·논리검증 결과 전달 + 전제 교정
@@ -64,7 +66,7 @@ _SYSTEM = """대화 에이전트
   - redirect: 스코프 밖 발화를 부드럽게 넘기고 본론으로 잇는다.
   - deliver_plan: 슬롯이 모두 채워져 계획서를 만들 준비가 됐다고 알린다(생성은 화면의 '계획서 생성' 버튼).
   - confirm_slot: 방금 사용자가 말한 값을 슬롯에 넣기 전에 확인한다. 후보 슬롯이 둘 이상이면 그 값과 후보들을 제시하고 "어디에 넣을까요?"를 한 문장으로 묻고, 후보가 하나면 "이거 [그 슬롯]에 넣어둘까요?"처럼 넣을지 말지를 한 문장으로 묻는다(사용자가 아직 정하지 않고 떠본 값이다). candidate_values가 여럿이면(한 슬롯에 들어갈 여러 안을 제시한 경우) 그 안들을 "- " 불릿으로 나열하고 어느 안으로 정할지 한 문장으로 묻는다. confirm_kind가 "replace"면 그 슬롯에 이미 있는 기존 값(previous)을 새 값으로 바꿀지 한 문장으로 묻는다(예: "타깃을 'X'로 바꿀까? 지금은 'Y'로 돼 있어"). 사용자가 답하기 전엔 다음 슬롯 질문(ask_slot)은 하지 않는다.
-  - ask_slot: 다음 채울 슬롯을 맥락 있게 한 문장으로 묻는다(참고 예시의 톤을 살려서).
+  - ask_slot: 다음 채울 슬롯을 맥락 있게 한 문장으로 묻는다(참고 예시의 톤을 살려서). partial이 있으면 사용자가 방금 그 슬롯에 주려던 값인데 알맹이가 모자라 아직 못 들어간 것이다 — 받은 부분(partial)은 인정해 주고, example이 요구하는 빠진 알맹이만 콕 집어 한 문장으로 마저 물어 채운다(받은 걸 버리거나 처음부터 다시 묻지 않는다). 예: partial="선정성 불일치 10% 해소"면 "'10% 해소'는 받았어 — 언제까지 달성할지랑 어디까지 안 되면 접을지(실패선)만 더해줄래?"처럼. (단 partial이 막연해 인정할 실질이 거의 없으면 굳이 그대로 되풀이하지 말고 그 슬롯을 자연스럽게 묻는다.)
 
 [예시]
 입력 intents: [{"type":"report_findings","subject":"웹툰 시장 규모","research":["국내 웹툰 시장은 2023년 약 1.8조 원 규모로 추정된다","네이버·카카오가 거래액의 다수를 차지한다"],"rag":[],"logic_validator":[],"agreement":"confirms"}, {"type":"ask_slot","slot":"target","example":"주로 어떤 독자층을 노리고 있어?"}]
@@ -272,18 +274,34 @@ def _build_intents(state: PlanState) -> list[dict]:
             intents.append({"type": "clarify", "text": text})
         suppress_ask = True
 
-    # 5) ask_slot — 위에서 막지 않았고 확인 대기도 없으면 다음 빈칸 1개
+    # 5) ask_slot — 위에서 막지 않았고 확인 대기도 없으면 슬롯 하나를 묻는다.
+    # (C) 사용자가 이번 턴에 직접 채우려 했지만 알맹이가 모자라 못 들어간 슬롯(incomplete_fills)이
+    # 있으면, 캐논 질문 순서(첫 빈칸)보다 그 슬롯을 먼저 묻는다 — 사용자가 지목한 칸을 무시하고
+    # 엉뚱한 슬롯을 묻던 문제를 없앤다. 아직 빈 슬롯만 본다(그새 다른 경로로 찼으면 무시).
+    incomplete = [
+        f
+        for f in (state.get("incomplete_fills") or [])
+        if f.get("slot") and not (slots.get(f["slot"]) or {}).get("value")
+    ]
     if not suppress_ask and not pending_item:
-        if next_empty is None:
+        target_slot = incomplete[0]["slot"] if incomplete else next_empty
+        if target_slot is None:
             intents.append({"type": "deliver_plan", "output_type": "ready", "empty_slots": []})
         else:
-            intents.append(
-                {
-                    "type": "ask_slot",
-                    "slot": next_empty,
-                    "example": SLOT_SPECS.get(next_empty, {}).get("question", ""),
-                }
+            ask = {
+                "type": "ask_slot",
+                "slot": target_slot,
+                "example": SLOT_SPECS.get(target_slot, {}).get("question", ""),
+            }
+            # (A) 그 칸에 사용자가 방금 준 부분값이 있으면 함께 실어, 받은 건 인정하고 빠진
+            # 알맹이만 마저 묻게 한다(조용히 버리고 처음부터 다시 묻지 않는다).
+            partial = next(
+                (f.get("partial_value", "") for f in incomplete if f["slot"] == target_slot),
+                "",
             )
+            if partial:
+                ask["partial"] = partial
+            intents.append(ask)
 
     return intents
 
@@ -323,7 +341,10 @@ def _fallback_message(intents: list[dict]) -> str:
                 parts.append("\n".join(f"- {f}" for f in findings))
         elif t == "ask_slot":
             example = (it.get("example") or "").strip()
-            if example:
+            partial = (it.get("partial") or "").strip()
+            if partial and example:
+                parts.append(f"'{partial}'는 받았어 — {example}")
+            elif example:
                 parts.append(example)
         elif t == "clarify":
             text = (it.get("text") or "").strip()
