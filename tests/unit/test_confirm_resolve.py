@@ -16,11 +16,13 @@ from agents.orchestrator.graph import _post_confirm_branch
 
 
 def _pending(value="V", proposed="problem", candidates=None,
-             confirm_kind="commit", attempts=0, previous_value="", adequate=True):
+             confirm_kind="commit", attempts=0, previous_value="", adequate=True,
+             candidate_values=None):
     return {
         "value": value,
         "proposed_slot": proposed,
         "candidate_slots": candidates or [proposed],
+        "candidate_values": candidate_values or [],
         "source_text": value,
         "reason": "",
         "attempts": attempts,
@@ -40,9 +42,10 @@ def _state(pending, user_input="이대로 넣어", filled=None):
     return st
 
 
-def _resolve(state, decision, monkeypatch, *, slot=None, additional=False):
+def _resolve(state, decision, monkeypatch, *, slot=None, additional=False, chosen_index=None):
     async def fake(system, user, schema, **kw):
-        return ConfirmOut(decision=decision, slot=slot, has_additional_content=additional)
+        return ConfirmOut(decision=decision, slot=slot, chosen_index=chosen_index,
+                          has_additional_content=additional)
 
     monkeypatch.setattr("agents.orchestrator.nodes.confirm.call_json", fake)
     return asyncio.run(confirm_resolve_node(state))
@@ -107,6 +110,50 @@ def test_reject_clears_queue_without_write(monkeypatch):
     assert "slots" not in out  # 슬롯 미변경(부분 dict 반환)
     assert out["pending_confirmations"] == []
     assert out["confirmation_consumed"] is True
+
+
+# ---- 다중 후보 값 pick (reason 제안 모드② — 한 슬롯에 여러 안 제시) ----------
+
+def _multi(confirm_kind="commit", proposed="solution", previous_value=""):
+    # 추천안(1번) + 두 대안. chosen_index로 사용자가 고른 안을 정한다.
+    return _pending(
+        value="로스팅 D2C+구독", proposed=proposed, confirm_kind=confirm_kind,
+        previous_value=previous_value,
+        candidate_values=["로스팅 D2C+구독", "로스터리 카페+로컬", "B2B 집중형"],
+    )
+
+
+def test_pick_chosen_value_fills_that_option(monkeypatch):
+    # 빈 슬롯에 세 안 제시 → 사용자가 3번(B2B 집중형) 고름 → 그 값으로 채운다(추천안 아님).
+    out = _resolve(_state([_multi(confirm_kind="commit")]),
+                   "pick", monkeypatch, chosen_index=3)
+    assert out["slots"]["solution"]["value"] == "B2B 집중형"
+    assert out["confirmation_consumed"] is True
+
+
+def test_accept_without_index_uses_recommended(monkeypatch):
+    # 특정 안을 콕 집지 않고 추천안 그대로 수락 → 1번(추천/value)으로 채운다.
+    out = _resolve(_state([_multi(confirm_kind="commit")]), "accept", monkeypatch)
+    assert out["slots"]["solution"]["value"] == "로스팅 D2C+구독"
+
+
+def test_pick_chosen_value_replace_overwrites_and_logs(monkeypatch):
+    # 이미 찬 solution에 세 안 제시 → 2번 고름 → 덮어쓰기 + correction_log 기록.
+    out = _resolve(
+        _state([_multi(confirm_kind="replace", previous_value="기존 카페 모델")],
+               filled={"solution": "기존 카페 모델"}),
+        "pick", monkeypatch, chosen_index=2,
+    )
+    assert out["slots"]["solution"]["value"] == "로스터리 카페+로컬"
+    assert any(c["slot"] == "solution" and c["previous"] == "기존 카페 모델"
+               and c["new"] == "로스터리 카페+로컬" for c in out["correction_log"])
+
+
+def test_pick_out_of_range_index_falls_back_to_recommended(monkeypatch):
+    # 범위 밖 인덱스(방어) → 추천안으로 안전 폴백.
+    out = _resolve(_state([_multi(confirm_kind="commit")]),
+                   "pick", monkeypatch, chosen_index=9)
+    assert out["slots"]["solution"]["value"] == "로스팅 D2C+구독"
 
 
 # ---- revise / unrelated (fall-through, 소비 안 함) ---------------------------

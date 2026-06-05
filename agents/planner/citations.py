@@ -155,7 +155,11 @@ def _reference_line(n: int, c: Citation) -> str:
 
 
 def render_references(foot: Footnotes) -> str:
-    """'## 근거 및 출처' 본문. 근거가 없으면 사용자 입력 기반임을 명시."""
+    """'## 근거 및 출처' 본문. 근거가 없으면 사용자 입력 기반임을 명시.
+
+    항목 사이를 빈 줄(\\n\\n)로 띄워 각 출처가 별도 문단으로 렌더되게 한다 — 한 항목이 여러
+    줄로 접혀도 다음 항목과 시각적으로 구분된다(렌더러가 nl2br 없이도 문단으로 분리).
+    """
     if not foot.numbered:
         return "근거 없음 — 사용자 입력 기반."
-    return "\n".join(_reference_line(n, c) for n, c in foot.numbered)
+    return "\n\n".join(_reference_line(n, c) for n, c in foot.numbered)

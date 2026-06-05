@@ -274,6 +274,7 @@ class Segment(TypedDict, total=False):
     in_scope: bool                       # 사업 계획과 관련 있는 발화인가. False면(무맥락 사실·잡담·무관 요청) classify가 routes=["none"]로 막고 conversation이 redirect intent로 부드럽게 되돌린다. 기본 True(애매하면 통과 — 과차단 방지).
     target_slot: str | None              # 들어갈 슬롯(있으면): "target"
     routes: list[Route]                  # 발동 워커: ["research","rag","logic_validator"]. 처리 우선순위·분기는 routes/utterance_types에서 직접 파생(별도 priority 필드 없음).
+    verifiable: Literal["verify", "skip", "uncertain"]  # 외부에서 참/거짓을 따질 전제가 있나. skip이면 claim이어도 워커 디스패치 안 함(사용자 결정·취향·제약 — 검증 대상 아님). uncertain은 안전하게 verify로 라우팅. 기본 verify(보수 — claim→skip 오라벨이 팩트체크를 건너뛰는 위험을 막는다).
 
 
 class Correction(TypedDict):
@@ -291,15 +292,26 @@ class PendingConfirmation(TypedDict, total=False):
     #   "slot"  — 값은 결정됐는데 어느 슬롯인지 애매 → 미응답 2회면 proposed로 자동 확정.
     #   "commit"— 결정 자체가 미확정(탐색) → 미응답이면 드롭(결정 안 한 건 안 채운다).
     #   "replace"— 이미 찬 슬롯과 충돌하는 새 값 → 사용자가 바꾸라 해야만 덮어쓴다(미응답이면 기존 유지).
-    value: str                  # 채우려던 값
+    value: str                  # 채우려던 값(다중 후보면 추천/1순위 안)
     proposed_slot: str          # fill이 1순위로 고른 슬롯
-    candidate_slots: list[str]  # [proposed, *alt_slots] — 사용자에게 제시할 후보(commit/replace면 1개)
+    candidate_slots: list[str]  # [proposed, *alt_slots] — 사용자에게 제시할 후보 슬롯(commit/replace면 1개)
+    candidate_values: list[str] # 한 슬롯에 들어갈 여러 안(reason 제안 모드②의 다중후보) — 사용자가 번호로 고른다(보통 비어있음=단일안)
     source_text: str            # 근거가 된 세그먼트 canonical_text(질문 문구용)
     reason: str                 # 왜 애매한지(짧게)
     attempts: int               # 재질문 횟수 — slot kind는 2회 이상 미응답이면 proposed로 자동 확정
     confirm_kind: Literal["slot", "commit", "replace"]  # 확인 종류(기본 slot, 하위호환)
     previous_value: str         # replace 전용 — 덮어쓸 기존 슬롯 값(확인 문구·롤백 기록용)
     adequate: bool              # 값이 슬롯 알맹이를 갖췄나 — False면 사용자가 수락해도 안 채운다(기본 True, 하위호환)
+
+
+class IncompleteFill(TypedDict):
+    # 사용자가 이번 턴에 어떤 슬롯을 직접 채우려 했지만 값의 알맹이가 모자라(fill의 adequate=false)
+    # 못 들어간 한 건. extract_slot_fills가 조용히 버리는 대신 여기 남기면 conversation이
+    #   (A) 받은 부분값(partial_value)은 인정하고, 그 슬롯 정의가 요구하는 빠진 알맹이만 콕 집어 되묻고,
+    #   (C) 캐논 질문 순서(첫 빈칸)보다 이 슬롯을 먼저 묻는다(사용자가 지목한 칸을 무시하지 않는다).
+    # extract_fills→conversation 한 턴 안에서만 흐르는 신호 — run_turn이 매 턴 리셋한다.
+    slot: str            # 사용자가 채우려던 슬롯("goal")
+    partial_value: str   # 받았지만 알맹이가 모자란 값("선정성 불일치 10% 해소")
 
 
 class Citation(TypedDict, total=False):
@@ -380,6 +392,7 @@ def initial_state() -> "PlanState":
         "pending_clarifications": [],
         "pending_question": "",
         "pending_confirmations": [],
+        "incomplete_fills": [],
         "open_proposal": None,
         "confirmation_consumed": False,
         "last_asked_slot": None,
@@ -411,6 +424,9 @@ class PlanState(TypedDict, total=False):
     pending_question: str
     # 애매해서 주입 보류된 확인 큐 — 한 번에 하나씩 confirm_slot으로 묻는다. 턴 넘어 영속.
     pending_confirmations: list[PendingConfirmation]
+    # 이번 턴 사용자가 직접 채우려 했지만 알맹이가 모자라(fill adequate=false) 못 들어간 슬롯들.
+    # extract_fills가 적재하고 conversation이 (A)부분값 인정+빠진 알맹이 되묻기 (C)그 슬롯 우선 질문에 쓴다. 매 턴 리셋.
+    incomplete_fills: list[IncompleteFill]
     # 턴 시작 시점의 열린 제안 스냅샷(pending_confirmations[0]) — confirm_resolve가 라이브 큐를
     # pop해도 segment·classify가 "이번 발화가 무엇에 대한 답인가"를 보게 매 턴 run_turn이 박아준다.
     open_proposal: PendingConfirmation | None

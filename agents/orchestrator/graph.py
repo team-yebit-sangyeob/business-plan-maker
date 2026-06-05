@@ -194,6 +194,7 @@ async def run_turn(
         "messages": messages,
         "turn_segments": [],
         "pending_clarifications": [],
+        "incomplete_fills": [],
         "turn_validation_reports": [],
         "turn_evidence": [],
         "evidence_mode": evidence_mode,

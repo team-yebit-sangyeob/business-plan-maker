@@ -91,7 +91,9 @@ open_proposal, confirmation_consumed, last_asked_slot, evidence_mode`.
 `initial_state()`가 빈 한 벌을 만든다 (슬롯 10개 모두 empty).
 > `pending_confirmations[]`는 **주입을 보류한 슬롯 값 큐**(`PendingConfirmation`). fill이 슬롯 애매(`confirm_kind="slot"`)·
 > 결정 미확정(탐색, `confirm_kind="commit"`)·찬 슬롯과 충돌(교체, `confirm_kind="replace"`)로 본 값을 슬롯 대신 여기 쌓고,
-> 다음 턴 `confirm_resolve`가 사용자 답으로 해소한다.
+> 다음 턴 `confirm_resolve`가 사용자 답으로 해소한다. **두 번째 등록 출처는 `conversation_node`** — reason 제안 모드②가
+> 슬롯 값을 제안하면 그 제안을 여기 commit/replace로 쌓는다(§3.7). 한 슬롯에 여러 안을 제시하면 `candidate_values[]`에
+> [추천, *대안]을 싣고, `confirm_resolve`가 `chosen_index`로 고른다(단일 안이면 비움).
 > 다른 턴 임시필드와 달리 `run_turn`이 리셋하지 않아 **턴을 넘어 영속**(세션 스토어가 통째 저장).
 > `open_proposal`·`confirmation_consumed`는 **이번 턴 전용**(`run_turn`이 매 턴 박는다): `open_proposal`은 턴 시작 시점의
 > 열린 제안 스냅샷(`pending_confirmations[0]`) — `confirm_resolve`가 라이브 큐를 pop해도 segment·classify가 "이번 발화가
@@ -142,8 +144,8 @@ START
 ### 3.0 `confirm_resolve_node` (`nodes/confirm.py`)
 
 **토폴로지상 맨 앞(START 직후)** — `pending_confirmations`가 비어 있으면 no-op이라 일반 턴엔 영향이 없다. 큐에 보류 건이 있으면, 이번 사용자 발화를 그 제안에 대한 답으로 보고 **태도(decision)**를 LLM이 판정한다(명령형 "이대로 넣어/넣어"도 제안에 대한 긍정이면 accept — 새 리서치 주문이 아니다; 보기는 예시지 정답 키워드가 아니라 의미로 판단):
-- `accept`: 제안대로 넣으라는 긍정·명령 → 제안 슬롯에 주입(`replace`면 기존 값 덮어쓰기 + correction_log 기록; 그 외엔 이미 찬 슬롯을 덮지 않음) + 큐 제거.
-- `pick`: 후보 둘 이상에서 하나 선택 → 그 슬롯 주입 + 큐 제거.
+- `accept`: 제안대로 넣으라는 긍정·명령 → 제안 슬롯에 주입(`replace`면 기존 값 덮어쓰기 + correction_log 기록; 그 외엔 이미 찬 슬롯을 덮지 않음) + 큐 제거. 다중 후보 값(`candidate_values`)이면 특정 안을 콕 집지 않은 수락이라 추천안(`value`=1순위)으로 채운다.
+- `pick`: 제시한 후보 중 하나 선택 → 그 슬롯·그 값 주입 + 큐 제거. (a) 후보 **슬롯**이 둘 이상이면 `slot`으로 어느 칸인지, (b) 한 슬롯에 후보 **값**이 여럿(`candidate_values`, reason 제안 모드②)이면 `chosen_index`(1-base)로 어느 안인지 고른다. 제시한 안 어디에도 없는 새 값을 말하면 accept/pick이 아니라 `revise`로 본다 — 명령형 "~로 하자"여도 억지로 가까운 안에 매칭해 잘못된 값을 박지 않는다.
 - `reject`: "아니/빼" 부정 → 큐에서 제거(슬롯 그대로).
 - `revise`: 값을 고쳐서 넣으라 → 스테일 값 버리고 큐 제거, 주입 안 함(고친 값은 파이프라인이 다시 뽑음).
 - `unrelated`: 그 질문과 무관한 다른 얘기 → `confirm_kind`로 가른다. `commit`(결정 미확정)·`replace`(교체 확인)는 드롭(결정/교체 안 한 건 안 건드린다), `slot`(값은 결정, 칸만 모름)은 `attempts++` 후 한도(2회) 넘으면 제안 슬롯으로 자동 확정(무한 재질문 방지).
@@ -203,13 +205,13 @@ START
 dispatch 경로에서만 실행 (그래프상 dispatch 다음). 세그먼트에서 슬롯 값을 추출해 주입/확인하고, **슬롯 선택의 단일 권위**다(segment는 더 이상 힌트를 주지 않으므로 — 정의·경계만으로 정한다).
 - 후보 = `claim` 라벨 가진 세그먼트. (빈 슬롯이 없어도 충돌 교체 감지를 위해 호출한다 — 예전의 "빈 슬롯 없으면 스킵"은 제거.)
 - `_FILL_SYSTEM`에 `slot_guide_text()` + **`[직전 대화]`(recent_history)** + `[현재 슬롯]`·`[비어있는 슬롯]` 임베드. LLM은 fill마다 `{slot, value, kind(decision|exploration), confidence(clear|ambiguous), alt_slots[], reason, adequate}` 반환. 축: `kind`(**결정**했나)·`confidence`(**어느 슬롯**인지 명확)·`adequate`(값이 슬롯 정의의 **알맹이**를 갖췄나).
-- `kind=decision` 기준: (a) 명시적 확정("X로 하자/가자/정했어") 또는 (b) 직전에 어시스턴트가 물은 슬롯 질문에 직접 답함. 단순 탐색·가설은 `exploration`. (b)는 **결정론 안전망** — `conversation_node`가 `ask_slot` 때 `last_asked_slot`을 기록하고, fill은 그 슬롯 답이면 LLM이 `exploration`을 줘도 `decision`으로 승격(짧은 명사구 답이 확인 질문으로 새는 과차단 방지).
-- 쓰기 게이트:
-  - **이미 찬 슬롯 + 다른 값(결정, 정정 마커 없음)** → 덮어쓰지 않고 `pending_confirmations`(`confirm_kind="replace"`, `previous_value`=기존 값)에 쌓아 다음 턴 "바꿀까?"를 확인 — 사용자의 새 값이 묵살되던(찬 슬롯이라 fill이 건드리지 않고 correction도 안 도는) 문제를 막는다. 명시적 정정("빼/말고")은 그대로 correction_node가 직접 적용(확인 불필요).
-  - **결정 + 공허(`adequate=false`)** → 채우지 않고 비워둔다(다음 턴 빈칸으로 되묻기). "골은 결과물"처럼 슬롯 기준 미달 값이 박히는 걸 막는 충분성 게이트의 정밀 단계(coarse는 classify, §3.2).
-  - **결정 + 슬롯 명확 + 충분** → 빈 슬롯에 즉시 주입(`source_label=USER`).
-  - **결정 + 슬롯 애매**(`ambiguous`/`alt_slots`) → `pending_confirmations`(`confirm_kind="slot"`)에 쌓음(후보 중 빈 슬롯 없으면 스킵). 다음 턴 "어느 슬롯?" 답으로 확정.
-  - **탐색** → 주입 안 함. 빈 슬롯이면 `pending_confirmations`(`confirm_kind="commit"`, **턴당 1건**)에 쌓아 "이거 X에 넣을까요?"를 묻고, 미응답이면 드롭.
+- `kind=decision` 기준: (a) 명시적 확정("X로 하자/가자/정했어") 또는 (b) 직전에 어시스턴트가 물은 슬롯 질문에 직접 답함. 단순 탐색·가설은 `exploration`. **빈 슬롯은 결정/탐색 무관하게 채우므로(가역), `kind`는 이제 주로 *이미 찬 슬롯을 덮어쓸지*(replace)를 가른다** — 확정이면 "바꿀까?" 확인, 떠보는 말이면 기존 값은 안 건드린다. (b)는 그 안전망 — `last_asked_slot`에 답한 값은 `exploration`이라도 `decision`으로 승격해, 찬 슬롯이면 교체 확인으로 간다.
+- 쓰기 게이트 (**빈 슬롯 채움은 가역이라 적극적으로 채운다** — 확인은 비가역에 가까운 경우만):
+  - **빈 슬롯 + 슬롯 명확 + 충분** → 즉시 주입(`source_label=USER`). **결정/탐색 무관** — 떠보는 말이어도 빈 칸이면 채운다(틀리면 "빼/바꿔"로 정정, 가역). 한 턴에 빈 슬롯이 여럿이면 **다 채운다**(턴당 캡 없음). 사용자가 자연스레 여러 사실을 한 턴에 말해도 다 박힌다.
+  - **빈 슬롯 + 슬롯 애매**(`ambiguous`/`alt_slots`) → `pending_confirmations`(`confirm_kind="slot"`)에 쌓음(후보 중 빈 슬롯 없으면 스킵). 다음 턴 "어느 슬롯?" 답으로 확정 — *잘못된 칸*은 가역이 아니라 확인을 남긴다.
+  - **이미 찬 슬롯 + 다른 값(결정, 정정 마커 없음)** → 덮어쓰지 않고 `pending_confirmations`(`confirm_kind="replace"`, `previous_value`=기존 값)에 쌓아 다음 턴 "바꿀까?"를 확인 — *덮어쓰기는 비가역적 손실*이라 확인 후에만. 탐색이면 기존 값은 안 건드린다. 명시적 정정("빼/말고")은 그대로 correction_node가 직접 적용(확인 불필요).
+  - **공허(`adequate=false`)** → 어느 경로로도 안 채운다. "골은 결과물"처럼 슬롯 기준 미달 값이 박히는 걸 막는 충분성 게이트의 정밀 단계(coarse는 classify, §3.2). **단 조용히 버리지 않는다** — 빈 슬롯에 사용자가 직접 준 부분값이면(예: goal에 기한·실패선 없이 "10% 해소") `incomplete_fills`(매 턴 리셋)에 `{slot, partial_value}`로 남긴다. 그러면 `conversation`이 캐논 첫 빈칸 대신 **그 슬롯을 우선 되묻고**(C) **받은 부분은 인정하고 빠진 알맹이만** 콕 집어 묻는다(A, §3.7). "Goal 슬롯에 써줘"라고 칸을 지목했는데 값이 부족해 조용히 드롭되고 엉뚱한(캐논 첫 빈칸) 슬롯을 묻던 회귀를 막는다. 부재 서술 비-답("명시되지 않음" 류 `_NON_ANSWER_MARKERS`)은 진짜 부분값이 아니라 되묻기 신호에서도 거른다(헛 인정 방지).
+  - `confirm_kind="commit"`은 이제 fill이 아니라 **`conversation`의 reason 제안**(§3.7)에서만 만든다 — fill의 *탐색→commit 큐(턴당 1건)·미응답 드롭* 경로는 제거했다(빈 슬롯 적극 채움으로 대체). "너무 안 채워줌"의 주범이 여러 사실을 한 턴에 말할 때 1건만 큐에 걸고 나머지를 드롭하던 이 경로였다.
 - **근거 슬롯 태그(Part 1)**: 처리한 각 fill의 슬롯을 아직 태그 없는 `claim` 세그먼트에 순서대로 단다(`target_slot`) — segment가 더는 힌트를 주지 않으므로, `run_turn`의 evidence→슬롯 백필(§1)이 쓸 연결을 fill이 채운다.
 - → "결정 안 한 값이 박히는"·"같은 내용이 다른 슬롯에"·"공허한 값이 박히는"·"찬 슬롯 새 값이 묵살되는" 문제를 경계 명문화 + 선택 단일화 + 결정/탐색/충분성/충돌 분리 + 확인으로 막는다.
 
@@ -276,8 +278,9 @@ logic_validator → run_logic_validator(subject, rag_result)   # rag_result 있�
 state에서 **intent 목록을 결정론으로 뽑아**(`_build_intents`) **LLM 1회로 한 응답으로 렌더** (대화 에이전트). conversation_spec TRIGGER MATRIX 전체를 지원:
 `ask_slot · confirm_slot · clarify · report_findings · answer_question · recall · explain_tool · reason_over_context · redirect · acknowledge · deliver_plan`.
 > 구현 차이: conversation_spec은 `report_research`·`report_critique`를 별도 intent로 두지만, 코드는 한 주제의 research·rag·logic_validator 결과를 **`report_findings` 하나로 통합**해 넘긴다(렌더 프롬프트가 출처별로 구분). spec이 "둘은 한 턴에 묶일 수 있다(통합은 integrator 몫)"고 한 것을 그대로 반영.
-- **intent 선택(결정론)**: 이번 턴 정정→`acknowledge`, `recall` 라벨 세그먼트→`recall`(대화 이력에서 답), `tool_help` 라벨 세그먼트→`explain_tool`(SLOT_SPECS·APP_OVERVIEW에서 답, in_scope 무관), `reason` 라벨 세그먼트→`reason_over_context`(누적 근거 `session_evidence`+대화이력을 재료로 실어 직접 추론·제안, in_scope 무관), `pending_confirmations`→`confirm_slot`(보류값과 후보 슬롯 제시; `confirm_kind="replace"`면 기존 값 `previous`를 실어 "X로 바꿀까?"로 물음), `in_scope=false`→`redirect`(단 tool_help·reason 세그먼트는 건너뛴다 — explain_tool·reason_over_context 우선), `turn_validation_reports`→주제별 `report_findings`(claim) 또는 `answer_question`(question), `clarify` 라우트→`clarify`. 위에서 막지 않았고 **확인 대기(`confirm_slot`)도 없으면** `ALL_SLOTS` 첫 빈칸으로 `ask_slot`(recall·explain_tool·reason_over_context·confirm_slot·clarify가 있으면 다음 질문 보류). 빈칸이 하나도 없으면 `deliver_plan`(ready)로 준비됐다고 안내.
+- **intent 선택(결정론)**: 이번 턴 정정→`acknowledge`, `recall` 라벨 세그먼트→`recall`(대화 이력에서 답), `tool_help` 라벨 세그먼트→`explain_tool`(SLOT_SPECS·APP_OVERVIEW에서 답, in_scope 무관), `reason` 라벨 세그먼트→`reason_over_context`(누적 근거 `session_evidence`+대화이력을 재료로 실어 직접 추론·제안, in_scope 무관), `pending_confirmations`→`confirm_slot`(보류값과 후보 슬롯 제시; `confirm_kind="replace"`면 기존 값 `previous`를 실어 "X로 바꿀까?"로 물음), `in_scope=false`→`redirect`(단 tool_help·reason 세그먼트는 건너뛴다 — explain_tool·reason_over_context 우선), `turn_validation_reports`→주제별 `report_findings`(claim) 또는 `answer_question`(question), `clarify` 라우트→`clarify`. 위에서 막지 않았고 **확인 대기(`confirm_slot`)도 없으면** `ask_slot`(recall·explain_tool·reason_over_context·confirm_slot·clarify가 있으면 다음 질문 보류). **물을 슬롯은 `incomplete_fills`(이번 턴 사용자가 채우려다 알맹이 부족으로 못 들어간 빈 슬롯)가 있으면 그걸 우선, 없으면 `ALL_SLOTS` 첫 빈칸**(C). incomplete 슬롯이면 그 `partial_value`를 `ask_slot.partial`로 실어 **받은 부분은 인정하고 빠진 알맹이만** 묻게 한다(A — partial이 막연하면 LLM이 되풀이하지 않고 자연스레 묻는다). 빈칸이 하나도 없으면 `deliver_plan`(ready)로 준비됐다고 안내.
 > **`reason_over_context`의 두 모드** — `reason` 발화가 ① **종합 요청**이면 가진 근거를 1~5문장으로 정리해 전하고, ② **제안·결정 요청**("네 생각엔 문제가 뭐야?")이면 **되묻지 않고** 그 슬롯에 들어갈 구체적 후보를 직접 제안하고 채택/수정을 한 문장으로 묻는다. 어느 슬롯인지는 코드가 주입하지 않고 LLM이 `subject`("…문제는…")와 `slots` 상태로 정한다(표현 결정은 LLM 몫). 예: 누적 근거에 "저가 커피 포화·수익성 악화"가 있을 때 `"네 생각엔 우리 문제가 뭐야?"` → **"모은 걸 보면 저가 커피 포화로 신규 점포 수익성이 떨어지는 게 핵심 문제 같아 — 이렇게 잡아볼까?"**. 근거가 비면 일반 추론으로 한 후보를 던지되 부족함을 밝히고 무엇을 먼저 찾을지 한 문장으로 잇는다. **회귀 배경**: 예전엔 제안 요청이 `question`으로 흘러 또 리서치를 돌리거나, 막판 `ask_slot`이 같은 질문("누가·어떤 상황에서…")을 사용자에게 되묻던 — "네 의견을 달라"는데 의견을 안 주는 회피였다. classify의 reason 확장(§3.2 ④) + segment의 프레이밍 보존(§3.1) + 이 제안 모드가 한 세트로 이 회피를 막는다.
+> **제안→채택→슬롯반영 루프(②의 뒷단)** — 모드②에서 LLM은 메시지에 제안을 쓰면서 **구조화 필드 `proposal={slot, value, alternatives[]}`**도 함께 낸다(표현이 아니라 '무엇을 제안했나'라는 재료). `conversation_node`(코드)가 이를 받아 `pending_confirmations`에 등록한다 — 빈 슬롯이면 `confirm_kind="commit"`, 이미 찬 슬롯이면 `replace`(+`previous_value`), 여러 안을 제시하면 `candidate_values`에 [추천, *대안]을 싣는다(단일 안이면 비움). 등록은 reason intent가 있는 턴에서만, 같은 슬롯이 큐에 없을 때만(코드 가드). 그래야 다음 턴 `run_turn`이 `open_proposal`을 스냅샷하고(§2), `confirm_resolve`가 사용자의 수락(`accept`→추천안)·선택(`pick`+`chosen_index`→그 안)·거부·수정을 슬롯에 반영한다(§3.0) — `extract_slot_fills`의 commit/replace 확인과 **같은 메커니즘 재사용**(신규 분기 0). 이게 없으면 어시스턴트 제안이 메시지 텍스트로만 남아, 사용자가 "그걸로 하자"라고 해도 묶일 대상이 없고 그 발화가 `meta`/`clarify`로 떨어져 증발한다(원래 갭). 책임 경계: LLM은 제안 표현 + 제안 내용(`proposal`)만, 확인 큐 등록·commit/replace 판정·pick 해소는 코드.
 - **렌더(LLM)**: intent 목록 JSON(+최근 대화 `recent_messages`)을 받아 한 메시지로 매끄럽게 연결(예: 결과 보고 → 다음 질문). `recent_messages`는 `recall` intent를 답할 때만 근거로 쓴다. 슬롯별 질문 톤은 `SLOT_SPECS[...]["question"]`(단일 원천)에서 가져와 `ask_slot.example`로 주입.
 - **분류·판단은 안 함** — 무엇을 보고/질문할지는 state에서 파생, 대화는 표현만.
 
@@ -321,7 +324,7 @@ state에서 **intent 목록을 결정론으로 뽑아**(`_build_intents`) **LLM 
 | 애매한 슬롯 값(어느 칸) | 라벨에 따라 | 보류→확인 후 | fill `ambiguous` → `confirm_slot`(slot) → 다음 턴 `confirm_resolve` |
 | 탐색·미결정 값 | 라벨에 따라 | 보류→확인 후(미응답 드롭) | fill `kind=exploration` → `confirm_slot`(commit, "이거 X에 넣을까요?") |
 | 확인 응답(넣어/빼/바꿔) | 없음 | confirm_resolve가 반영 | 순수 답이면 `confirmation_consumed` → `_post_confirm_branch`로 segment 이하 우회 |
-| 공허한 슬롯 답("골=결과물") | 없음(되묻기) | 안 채움 | classify `clarification_needed`(coarse) / fill `adequate=false`(정밀) → 구체화 요청 |
+| 공허한 슬롯 답("골=결과물") | 없음(되묻기) | 안 채움 → `incomplete_fills` | classify `clarification_needed`(coarse) / fill `adequate=false`(정밀) → 그 슬롯을 우선 되묻고 받은 부분은 인정(A+C) |
 | 찬 슬롯과 충돌(타깃 교체) | 라벨에 따라 | 보류→교체 확인 후 | fill `confirm_kind="replace"` → `confirm_slot`("X로 바꿀까?") |
 
 > **신호 키워드 정확도**("말고"·"빼자"·"뽑아줘")가 성능의 큰 부분. 첫 단계인

@@ -102,6 +102,30 @@ def test_derive_routes_clarification_only_has_no_worker():
     assert routes == ["clarify"]
 
 
+# ---- verifiable 3값 — 사용자 결정(skip)은 디스패치 0, 외부 사실(verify)은 워커 ----
+
+def test_derive_routes_claim_default_verify_dispatches():
+    # 기본값 verify(하위호환) — claim이면 워커 라우트가 그대로 나온다.
+    assert derive_routes(["claim"]) == ["research", "rag", "logic_validator"]
+    assert derive_routes(["claim"], "verify") == ["research", "rag", "logic_validator"]
+
+
+def test_derive_routes_claim_skip_drops_workers():
+    # 사용자 결정(외부 전제 없음) → 워커 디스패치 0.
+    assert derive_routes(["claim"], "skip") == ["none"]
+    assert not (_WORKER_ROUTES & set(derive_routes(["claim"], "skip")))
+
+
+def test_derive_routes_uncertain_still_dispatches():
+    # uncertain은 안전하게 verify처럼 — 검증을 건너뛰지 않는다.
+    assert derive_routes(["claim"], "uncertain") == ["research", "rag", "logic_validator"]
+
+
+def test_derive_routes_skip_preserves_question():
+    # question은 본질적으로 외부 조회 — skip이어도 워커를 살린다(안전 백스톱).
+    assert derive_routes(["claim", "question"], "skip") == ["research", "rag"]
+
+
 # ===========================================================================
 # 레이어 2 — dispatch 노드 + 스파이: 워커 라우트 없는 세그먼트는 호출 0
 # ===========================================================================
