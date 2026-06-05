@@ -12,6 +12,7 @@ import asyncio
 import agents.orchestrator.graph  # noqa: F401  -- 순환 import 순서 고정(먼저 로드)
 
 from common.config import conversation_reasoning_effort
+from common.schema.labels import SourceLabel
 from common.schema.state import ALL_SLOTS, initial_state
 from agents.conversation.agent import ConversationOut, conversation_node
 
@@ -157,6 +158,73 @@ def test_reason_request_proposes_not_asks(monkeypatch):
     assert "last_asked_slot" not in out
     # LLM이 돌려준 제안 문구가 그대로 사용자에게 간다(퇴화 대체 안 탐).
     assert out["pending_question"].endswith("이렇게 잡아볼까?")
+
+
+# ---- reason 제안 → pending_confirmations 등록(채택→슬롯반영 닫힌 루프의 앞단) -----
+
+def _reason_seg(text="네가 생각하는 문제는 뭐야?"):
+    return {
+        "text": text, "canonical_text": text, "utterance_types": ["reason"],
+        "in_scope": True, "target_slot": None, "routes": ["none"],
+    }
+
+
+def test_reason_proposal_registers_pending_commit(monkeypatch):
+    # 빈 슬롯에 어시스턴트가 구체적 값을 제안(모드②) → commit 확인 큐로 등록(다음 턴 수락 대상).
+    async def fake(system, user, schema, *, reasoning_effort=None):
+        return ConversationOut(
+            message="문제는 공급 불안정 같아 — 이렇게 잡아볼까?",
+            proposal={"slot": "problem", "value": "납품 품질·공급 불안정으로 운영 손실"},
+        )
+
+    monkeypatch.setattr("agents.conversation.agent.call_json", fake)
+    state = initial_state()
+    state["turn_segments"] = [_reason_seg()]
+    out = asyncio.run(conversation_node(state))
+
+    pend = out["pending_confirmations"]
+    assert len(pend) == 1
+    assert pend[0]["proposed_slot"] == "problem"
+    assert pend[0]["confirm_kind"] == "commit"   # 빈 슬롯
+    assert pend[0]["value"] == "납품 품질·공급 불안정으로 운영 손실"
+    assert pend[0]["candidate_values"] == []      # 단일 안
+    assert pend[0]["adequate"] is True
+
+
+def test_reason_proposal_multi_candidate_replace(monkeypatch):
+    # 이미 찬 슬롯에 여러 안 제시 → replace + candidate_values(추천 + 대안들).
+    async def fake(system, user, schema, *, reasoning_effort=None):
+        return ConversationOut(
+            message="세 모델 제안 — 1순위는 D2C. 어느 걸로?",
+            proposal={"slot": "solution", "value": "로스팅 D2C+구독",
+                      "alternatives": ["로스터리 카페+로컬", "B2B 집중형"]},
+        )
+
+    monkeypatch.setattr("agents.conversation.agent.call_json", fake)
+    state = initial_state()
+    state["slots"]["solution"] = {"value": "기존 카페 모델", "source_label": SourceLabel.USER,
+                                  "status": "filled"}
+    state["turn_segments"] = [_reason_seg("솔루션 추천해줘")]
+    out = asyncio.run(conversation_node(state))
+
+    pend = out["pending_confirmations"]
+    assert pend[0]["proposed_slot"] == "solution"
+    assert pend[0]["confirm_kind"] == "replace"        # 이미 찬 슬롯
+    assert pend[0]["previous_value"] == "기존 카페 모델"
+    assert pend[0]["candidate_values"] == ["로스팅 D2C+구독", "로스터리 카페+로컬", "B2B 집중형"]
+
+
+def test_proposal_ignored_without_reason_intent(monkeypatch):
+    # reason 세그먼트가 없는 턴(claim 등)엔 LLM이 proposal을 내도 코드가 등록하지 않는다(가드).
+    async def fake(system, user, schema, *, reasoning_effort=None):
+        return ConversationOut(message="음, 그건 좀 더 좁혀보자.",
+                               proposal={"slot": "problem", "value": "아무거나"})
+
+    monkeypatch.setattr("agents.conversation.agent.call_json", fake)
+    state = initial_state()
+    state["turn_segments"] = [_claim_seg("커피 시장이 크다")]
+    out = asyncio.run(conversation_node(state))
+    assert "pending_confirmations" not in out
 
 
 def test_conversation_guard_passes_normal_short_reply(monkeypatch):
