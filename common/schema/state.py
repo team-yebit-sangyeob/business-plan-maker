@@ -291,9 +291,10 @@ class PendingConfirmation(TypedDict, total=False):
     #   "slot"  — 값은 결정됐는데 어느 슬롯인지 애매 → 미응답 2회면 proposed로 자동 확정.
     #   "commit"— 결정 자체가 미확정(탐색) → 미응답이면 드롭(결정 안 한 건 안 채운다).
     #   "replace"— 이미 찬 슬롯과 충돌하는 새 값 → 사용자가 바꾸라 해야만 덮어쓴다(미응답이면 기존 유지).
-    value: str                  # 채우려던 값
+    value: str                  # 채우려던 값(다중 후보면 추천/1순위 안)
     proposed_slot: str          # fill이 1순위로 고른 슬롯
-    candidate_slots: list[str]  # [proposed, *alt_slots] — 사용자에게 제시할 후보(commit/replace면 1개)
+    candidate_slots: list[str]  # [proposed, *alt_slots] — 사용자에게 제시할 후보 슬롯(commit/replace면 1개)
+    candidate_values: list[str] # 한 슬롯에 들어갈 여러 안(reason 제안 모드②의 다중후보) — 사용자가 번호로 고른다(보통 비어있음=단일안)
     source_text: str            # 근거가 된 세그먼트 canonical_text(질문 문구용)
     reason: str                 # 왜 애매한지(짧게)
     attempts: int               # 재질문 횟수 — slot kind는 2회 이상 미응답이면 proposed로 자동 확정

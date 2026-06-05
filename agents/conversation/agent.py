@@ -23,6 +23,8 @@ from __future__ import annotations
 
 import json
 
+from typing import Optional
+
 from pydantic import BaseModel
 
 from common.schema import PlanState
@@ -57,11 +59,11 @@ _SYSTEM = """대화 에이전트
   - answer_question: 사용자가 물은 것에 research·rag가 찾은 답(findings)을 1~3문장으로 직접 전한다 — 질문에 대한 답이 본문이 되게 핵심을 풀어 쓴다. findings가 비어 있으면 솔직히 못 찾았다고 하고 본론으로 잇는다.
   - recall: 사용자가 직전 대화에 나온 내용을 되묻거나 확인하는 발화. recent_messages(최근 대화 이력)에서 찾아 간결하고 직접적으로 답한다(새 검색·워커 없이). 이력에 없으면 솔직히 모른다고 하고 부드럽게 잇는다.
   - explain_tool: 사용자가 이 도구·슬롯·사용법을 물었다(subject). 주어진 body(도구 설명 + 슬롯 정의 전부)를 참고해 subject가 묻는 만큼만 친근하게 답한다(새 검색·워커 없이, recent_messages도 안 씀). 특정 슬롯 하나를 물으면 그 슬롯만 한두 문장으로, 여러·모든 슬롯을 물으면 해당 슬롯들을 "- 제목: 역할" 불릿으로 빠짐없이, 도구 전반을 물으면 개요로 답한다. body에 없는 내용은 지어내지 않는다. 답한 뒤 한 문장으로 본론(계획 채우기)으로 가볍게 잇는다.
-  - reason_over_context: 사용자가 이미 모은 근거·대화 내용에서 결론·문제점·시사점을 추론·도출·종합해달라고 했다(subject). 주어진 context(누적 근거: subject·cluster·agreement·findings)와 recent_messages를 근거로 직접 추론해 핵심을 1~5문장으로 정리해 전한다(새 검색·워커 없이). 가진 근거 범위에서만 추론하고 없는 사실은 지어내지 않는다. 항목이 여럿이면 "- " 불릿으로 정리한다. context가 비어 있으면 아직 모아둔 근거가 없다고 솔직히 말하고, 무엇을 먼저 찾아보면 좋을지 한 문장으로 제안한다. subject가 어떤 슬롯의 값을 어시스턴트더러 정해·제안해달라는 것이면("네 생각엔 문제가 뭐야/정해줘/제안해봐"), 이론 설명이나 같은 질문 되묻기로 흘리지 말고 — 가진 근거에서 그 슬롯에 들어갈 구체적 후보 1개(필요하면 대안 하나)를 직접 제안하고 "이렇게 잡아볼까, 아니면 손볼까?"처럼 채택/수정을 한 문장으로 묻는다. 어느 슬롯인지는 subject 문구와 slots 상태로 판단한다. 근거가 없으면 일반 추론으로 후보 하나를 던지되 근거가 부족함을 밝히고 무엇을 먼저 찾아보면 좋을지 한 문장으로 잇는다.
+  - reason_over_context: 사용자가 이미 모은 근거·대화 내용에서 결론·문제점·시사점을 추론·도출·종합해달라고 했다(subject). 주어진 context(누적 근거: subject·cluster·agreement·findings)와 recent_messages를 근거로 직접 추론해 핵심을 1~5문장으로 정리해 전한다(새 검색·워커 없이). 가진 근거 범위에서만 추론하고 없는 사실은 지어내지 않는다. 항목이 여럿이면 "- " 불릿으로 정리한다. context가 비어 있으면 아직 모아둔 근거가 없다고 솔직히 말하고, 무엇을 먼저 찾아보면 좋을지 한 문장으로 제안한다. subject가 어떤 슬롯의 값을 어시스턴트더러 정해·제안·추천·작성해달라는 것이면("네 생각엔 문제가 뭐야/정해줘/제안해봐/추천해줘/만들어줘"), 종합 설명(①)으로 흘리거나 같은 질문 되묻기로 떠넘기지 말고 반드시 제안(②)으로 답한다 — 가진 근거에서 그 슬롯에 들어갈 구체적 후보를 직접 제안하고 "이렇게 잡아볼까, 아니면 손볼까?"처럼 채택/수정을 한 문장으로 묻는다. 갈래가 하나로 좁혀지면 후보 1개를, 갈래가 여럿이면 2~3개를 제시하고 그중 1순위를 추천한다(그러면 사용자가 다른 안을 골라도 바로 반영된다). 어느 슬롯인지는 subject 문구와 slots 상태로 판단한다. 근거가 없으면 일반 추론으로 후보 하나를 던지되 근거가 부족함을 밝히고 무엇을 먼저 찾아보면 좋을지 한 문장으로 잇는다. 이렇게 어느 슬롯에 들어갈 구체적 값을 제안하고 채택/수정을 물은 경우(②)에는, 메시지로만 제안하지 말고 제안한 슬롯과 그 값을 proposal 필드에도 반드시 함께 담는다(proposal.slot=그 슬롯의 키, proposal.value=네가 제안한 구체적 값) — proposal을 비우면 다음 턴에 사용자가 "그걸로 하자"라고 해도 그 채택을 슬롯에 반영할 수 없다. 한 슬롯을 두고 여러 안을 제시하고 하나를 추천한 경우엔 추천/1순위 안을 proposal.value에, 함께 제시한 나머지 안들을 proposal.alternatives에 담는다(사용자가 그중 골라 정할 수 있게). 종합·정리만 한 경우(①)나 reason이 아닌 다른 intent를 답할 때는 proposal을 비운다(null).
   - clarify: 모호한 발화를 좁히는 질문을 한다(이게 있으면 보통 ask_slot은 보류된다).
   - redirect: 스코프 밖 발화를 부드럽게 넘기고 본론으로 잇는다.
   - deliver_plan: 슬롯이 모두 채워져 계획서를 만들 준비가 됐다고 알린다(생성은 화면의 '계획서 생성' 버튼).
-  - confirm_slot: 방금 사용자가 말한 값을 슬롯에 넣기 전에 확인한다. 후보 슬롯이 둘 이상이면 그 값과 후보들을 제시하고 "어디에 넣을까요?"를 한 문장으로 묻고, 후보가 하나면 "이거 [그 슬롯]에 넣어둘까요?"처럼 넣을지 말지를 한 문장으로 묻는다(사용자가 아직 정하지 않고 떠본 값이다). confirm_kind가 "replace"면 그 슬롯에 이미 있는 기존 값(previous)을 새 값으로 바꿀지 한 문장으로 묻는다(예: "타깃을 'X'로 바꿀까? 지금은 'Y'로 돼 있어"). 사용자가 답하기 전엔 다음 슬롯 질문(ask_slot)은 하지 않는다.
+  - confirm_slot: 방금 사용자가 말한 값을 슬롯에 넣기 전에 확인한다. 후보 슬롯이 둘 이상이면 그 값과 후보들을 제시하고 "어디에 넣을까요?"를 한 문장으로 묻고, 후보가 하나면 "이거 [그 슬롯]에 넣어둘까요?"처럼 넣을지 말지를 한 문장으로 묻는다(사용자가 아직 정하지 않고 떠본 값이다). candidate_values가 여럿이면(한 슬롯에 들어갈 여러 안을 제시한 경우) 그 안들을 "- " 불릿으로 나열하고 어느 안으로 정할지 한 문장으로 묻는다. confirm_kind가 "replace"면 그 슬롯에 이미 있는 기존 값(previous)을 새 값으로 바꿀지 한 문장으로 묻는다(예: "타깃을 'X'로 바꿀까? 지금은 'Y'로 돼 있어"). 사용자가 답하기 전엔 다음 슬롯 질문(ask_slot)은 하지 않는다.
   - ask_slot: 다음 채울 슬롯을 맥락 있게 한 문장으로 묻는다(참고 예시의 톤을 살려서).
 
 [예시]
@@ -76,11 +78,20 @@ _SYSTEM = """대화 에이전트
 입력 intents: [{"type":"reason_over_context","subject":"여기서 도출할 문제점을 추론해줘","context":[{"subject":"국내 커피 시장 수익성","cluster":"research","agreement":"confirms","findings":["점포 포화로 가맹점 매출 감소","원두·인건비 상승"]}]}]
 좋은 응답: 모은 내용을 종합하면 — 국내 커피 시장은 점포 포화와 원두·인건비 상승이 겹쳐 가맹점 수익성이 떨어지고 있어서, 단순 출점 확대보다 운영 효율화·차별화가 핵심 과제로 보여.
 
-반드시 {"message": "..."} JSON만 출력하고, message는 위 규칙대로 intent 내용을 실제로 담은 비어있지 않은 문자열이어야 한다."""
+반드시 {"message": "...", "proposal": null} JSON만 출력한다. message는 위 규칙대로 intent 내용을 실제로 담은 비어있지 않은 문자열이어야 한다. proposal은 reason 제안 모드②에서 슬롯에 들어갈 구체적 값을 제안했을 때만 {"slot": 슬롯 키, "value": 제안한 값}로 채우고, 그 외엔 null로 둔다. proposal.slot은 입력 slots에 있는 슬롯 키여야 한다."""
+
+
+class SlotProposal(BaseModel):
+    slot: str
+    value: str  # 추천/1순위 안
+    alternatives: list[str] = []  # 함께 제시한 다른 안들(여러 안을 두고 고르라 한 경우)
 
 
 class ConversationOut(BaseModel):
     message: str
+    # reason 제안 모드②에서 LLM이 슬롯에 들어갈 구체적 값을 제안했을 때만 채워진다(그 외 null).
+    # conversation_node가 이를 pending_confirmations에 등록해 다음 턴 confirm_resolve가 해소한다.
+    proposal: Optional[SlotProposal] = None
 
 
 _AGREEMENT_PRIORITY = {"contradicts": 0, "partial": 1, "confirms": 2, "unknown": 3}
@@ -176,6 +187,7 @@ def _build_intents(state: PlanState) -> list[dict]:
                     {"slot": c, "title": slot_title(c)}
                     for c in (pending_item.get("candidate_slots") or [])
                 ],
+                "candidate_values": pending_item.get("candidate_values") or [],  # 다중후보면 안들 나열
                 "confirm_kind": pending_item.get("confirm_kind", "slot"),
                 "previous": pending_item.get("previous_value", ""),  # replace일 때 바꿀 기존 값
                 "reason": pending_item.get("reason", ""),
@@ -359,4 +371,48 @@ async def conversation_node(state: PlanState) -> dict:
     asked = next((i["slot"] for i in intents if i.get("type") == "ask_slot"), None)
     if asked is not None:
         result["last_asked_slot"] = asked
+
+    # reason 제안 모드②: 어시스턴트가 슬롯에 들어갈 구체적 값을 제안하고 "이렇게 잡아볼까?"로
+    # 채택/수정을 물었으면, 그 제안을 pending_confirmations에 구조화해 남긴다. 그래야 다음 턴
+    # confirm_resolve가 사용자 수락/거부/수정을 해소해 슬롯에 반영한다(extract_slot_fills의 commit/
+    # replace 확인과 같은 메커니즘 재사용). 이게 없으면 제안값이 메시지 텍스트로만 남아, 사용자가
+    # 수락해도 묶일 대상이 없고 그 발화가 meta/clarify로 떨어져 증발한다.
+    # 책임 경계: LLM은 '무엇을 제안했나'(proposal=재료)만 내고, 확인 큐 등록·commit/replace 판정은
+    # 코드가 한다. reason intent가 있는 턴에서만(다른 intent의 헛 proposal 무시), 같은 슬롯이 이미
+    # 큐에 없을 때만 등록한다.
+    prop = out.proposal
+    has_reason = any(i.get("type") == "reason_over_context" for i in intents)
+    if (
+        prop is not None
+        and has_reason
+        and prop.slot in ALL_SLOTS
+        and (prop.value or "").strip()
+    ):
+        pending = list(state.get("pending_confirmations") or [])
+        if not any(p.get("proposed_slot") == prop.slot for p in pending):
+            existing = ((state.get("slots") or {}).get(prop.slot) or {}).get("value") or ""
+            existing = existing.strip()
+            # 추천안 + 함께 제시한 다른 안들 → 중복 제거(순서 유지). 둘 이상이면 다중후보로 싣는다
+            # (confirm_resolve가 chosen_index로 고른다). 단일 안이면 candidate_values는 비운다.
+            cand_values: list[str] = []
+            for v in [prop.value, *(prop.alternatives or [])]:
+                v = (v or "").strip()
+                if v and v not in cand_values:
+                    cand_values.append(v)
+            pending.append(
+                {
+                    "value": prop.value.strip(),
+                    "proposed_slot": prop.slot,
+                    "candidate_slots": [prop.slot],
+                    "candidate_values": cand_values if len(cand_values) > 1 else [],
+                    "source_text": prop.value.strip(),
+                    "reason": "",
+                    "attempts": 0,
+                    # 빈 슬롯이면 commit("이거 넣을까?"), 이미 차 있으면 replace("바꿀까?").
+                    "confirm_kind": "replace" if existing else "commit",
+                    "previous_value": existing,
+                    "adequate": True,  # 모드② LLM이 구체적 값을 제안 — 알맹이 있음
+                }
+            )
+            result["pending_confirmations"] = pending
     return result
