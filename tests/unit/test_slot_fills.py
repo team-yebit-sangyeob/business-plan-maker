@@ -87,14 +87,33 @@ def test_inadequate_value_is_not_queued_to_commit(monkeypatch):
     assert out["turn_segments"][0]["target_slot"] == "problem"  # 근거 태그만
 
 
-def test_exploration_queues_commit(monkeypatch):
+def test_exploration_fills_empty_slot(monkeypatch):
+    # 적극 채움: 떠보는 말(exploration)이어도 빈 슬롯이면 즉시 채운다(가역 — 틀리면 정정).
+    # (이전: commit 확인 큐로 보냈다가 미응답이면 드롭 → "너무 안 채워줌" 마찰의 원인.)
     out = _run_fill(
         _state([_claim_seg("일본 시장도 괜찮으려나")]),
         [FillItem(slot="market", value="일본 시장", kind="exploration", confidence="clear")],
         monkeypatch,
     )
-    pend = out["pending_confirmations"]
-    assert pend and pend[0]["confirm_kind"] == "commit" and pend[0]["proposed_slot"] == "market"
+    assert out["slots"]["market"]["value"] == "일본 시장"
+    assert out["pending_confirmations"] == []   # 확인 큐로 안 보냄 — 바로 채움
+
+
+def test_multiple_empty_slots_all_fill_no_cap(monkeypatch):
+    # 한 턴에 사실 여럿 → 빈 슬롯을 다 채운다(턴당 1건 캡 제거). 탐색이어도.
+    out = _run_fill(
+        _state([_claim_seg("타겟은 20대"), _claim_seg("강남에서"), _claim_seg("월 1000만 목표")]),
+        [
+            FillItem(slot="target", value="20대", kind="exploration", confidence="clear"),
+            FillItem(slot="market", value="강남", kind="exploration", confidence="clear"),
+            FillItem(slot="goal", value="월 1000만", kind="exploration", confidence="clear"),
+        ],
+        monkeypatch,
+    )
+    assert out["slots"]["target"]["value"] == "20대"
+    assert out["slots"]["market"]["value"] == "강남"
+    assert out["slots"]["goal"]["value"] == "월 1000만"
+    assert out["pending_confirmations"] == []
 
 
 # ---- 충돌/교체 게이트 -------------------------------------------------------
